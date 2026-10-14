@@ -2,9 +2,9 @@
 
 **tmux-fingers for [Herdr](https://herdr.dev).** Press a key, every path,
 URL, Git SHA, IP, UUID and number on screen gets a one- or two-letter hint;
-type the hint and it is on your clipboard. Hold Shift to type it into the
-pane instead, Ctrl to open it. No mouse, no selection dragging, no
-scrolling back to find the thing.
+type the hint to open it. Hold Ctrl to copy it instead, Shift to type it
+into the pane. No mouse, no selection dragging, no scrolling back to find
+the thing.
 
 [![CI](https://github.com/ryanlewis/herdr-fingers/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanlewis/herdr-fingers/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
@@ -57,9 +57,9 @@ screen, where the freshest output is; identical texts share one hint.
 
 | Key | Does |
 |---|---|
-| hint (`a`, `sd`…) | copy the match to the clipboard |
+| hint (`a`, `sd`…) | open the match (see [Opening](#opening)) |
 | `Shift` + hint | type the match into the pane |
-| `Ctrl` + hint | open the match: URLs in the browser, files in their app |
+| `Ctrl` + hint | copy the match to the clipboard |
 | `Alt` + hint | custom action (none by default) |
 | `Tab` | toggle multi-select: pick several hints, then `Tab` or `Enter` |
 | `Backspace` | erase the last typed key |
@@ -119,16 +119,24 @@ keyboard_layout = "azerty"          # or qwerty-homerow, dvorak, colemak, …
 # alphabet = "asdfghjkl"            # your own keys instead of a layout
 hint_position = "left"              # or "right"
 
-main_action = ":copy:"              # plain hint
+main_action = ":open:"              # plain hint
 shift_action = ":paste:"            # Shift + hint
-ctrl_action = ":open:"              # Ctrl + hint
+ctrl_action = ":copy:"              # Ctrl + hint
 alt_action = ""                     # Alt + hint; e.g. "xargs nvim" or a script
+
+editor = "nvim +{line} {path}"      # files opened with :open: (default: $VISUAL, $EDITOR)
+editor_split = "right"              # or "down"
 
 enabled_builtin_patterns = ["url", "path", "sha", "git-status"]
 
 [[patterns]]
 name = "ticket"
 regex = "PROJ-[0-9]+"
+
+[[patterns]]
+name = "jira"                       # open ticket keys such as RET-1234
+regex = "\\b(?P<match>[A-Z][A-Z0-9]+-[0-9]+)\\b"
+open_url = "https://example.atlassian.net/browse/{}"
 
 [[patterns]]
 name = "env"
@@ -153,6 +161,49 @@ alt_action = "sh -c 'open \"https://github.com/search?q=$(cat)\"'"
 
 In multi-select mode the texts are joined with `multi_separator` (a space
 by default) and handed to the action of the last modifier used.
+
+### Opening
+
+`:open:` works out what the picked text is and does the matching thing.
+The first rule that applies wins:
+
+1. **A pattern with `open_url`**: the URL, with `{}` replaced by the match
+   (URL-encoded). `open_url` must start with `https://` or `http://` and
+   contain `{}`.
+2. **A web link** (`http://`, `https://`): the browser, through `open` on
+   macOS or `xdg-open` on Linux. Other links (`file://`, `ssh://`, `ftp://`,
+   `git://`, `git@…`) are not opened.
+3. **A Git SHA**: its commit page, when the pane's directory is in a Git
+   repository whose `origin` is on github.com. Otherwise the SHA is copied.
+4. **A path**: a trailing `:line` or `:line:col` (as in compiler and grep
+   output) is kept as the line to jump to; `~` is your home directory; a
+   relative path is taken from the pane's working directory, and a diff's
+   `a/` or `b/` prefix is dropped when the prefixed path does not exist.
+   - a folder opens with the system opener (Finder on macOS);
+   - a program — an executable file, or a `.app`, `.command`, `.terminal`,
+     `.tool`, `.workflow`, `.pkg`, `.dmg` or `.sh` — is never run: it is
+     shown in its folder instead (`open -R` on macOS, the folder on Linux);
+   - any other file opens in your editor, in a new pane beside the one
+     the hints came from.
+5. Anything else: nothing.
+
+When nothing can be opened (a missing file, a refused link, a number), the
+hints stay up and the status line says why, so you can press another key —
+`Ctrl` + hint to copy, for instance. With several hints picked, nothing is
+opened unless all of them can be.
+
+The editor is `editor` from the config, else `$VISUAL`, else `$EDITOR`.
+`{path}` is replaced by the file and `{line}` by the line number; a word
+that holds `{line}` is left out when there is no line. Without placeholders
+the editor gets `+{line} {path}`, which vim, neovim, emacs, nano and helix
+understand. The file name is always passed as one argument and never goes
+through a shell. The editor pane closes when the editor exits. With no
+editor at all, files are shown in their folder.
+
+```toml
+editor = "code --wait {path}"   # {path} must be a word of its own
+editor_split = "down"
+```
 
 ### Clipboard
 

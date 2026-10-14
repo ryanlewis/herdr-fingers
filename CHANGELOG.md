@@ -15,8 +15,17 @@ the plugin notices; the build pipeline and the docs live in the commit history.
   and checks its SHA-256, so no Rust toolchain is needed. It builds with
   cargo when there is no binary for the platform or the download fails.
 - The overlay's status line lists what each key does, built from the
-  configured actions (`hint copy · ⇧ paste · ⌃ open …`). Turn it off with
+  configured actions (`hint open · ⇧ paste · ⌃ copy …`). Turn it off with
   `show_legend = false`.
+- `:open:` works out what the picked text is: web links open in the browser,
+  folders with the system opener, files in your editor in a pane beside the
+  source pane (at the line, for `file:12:3`), Git SHAs on their GitHub
+  commit page. Programs and app bundles are shown in their folder, never
+  run; other link schemes and missing files are refused with a notice.
+- `open_url` on a custom pattern sends its matches to a URL, for instance
+  ticket keys such as `RET-1234` to your tracker.
+- `editor` and `editor_split` settings; the editor defaults to `$VISUAL`,
+  then `$EDITOR`.
 
 ### Changed
 - The plugin id is now `io.rlew.fingers`, and the plugin installs from
@@ -25,6 +34,9 @@ the plugin notices; the build pipeline and the docs live in the commit history.
   to the directory `herdr plugin config-dir io.rlew.fingers` prints.
 - The log no longer holds the text you pick. It records the action and the
   length; `log_picked_text = true` brings the preview back.
+- A plain hint now opens the match; `Ctrl` + hint copies it (`main_action`
+  is `:open:` and `ctrl_action` is `:copy:` by default). Set them back in
+  `config.toml` to keep the old keys.
 
 ## [0.1.0] - 2026-09-22
 
