@@ -126,6 +126,15 @@ mod tests {
     }
 
     #[test]
+    fn an_open_error_does_not_repeat_the_target() {
+        let target = temp_file("missing-secret");
+        let error = SystemLauncher
+            .open(target.to_str().unwrap(), None)
+            .unwrap_err();
+        assert!(!error.0.contains("missing-secret"));
+    }
+
+    #[test]
     fn a_failing_or_unparsable_command_is_reported() {
         let error = SystemLauncher
             .run("sh -c 'exit 2'", "x", &[], None)
