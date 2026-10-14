@@ -319,11 +319,14 @@ mod tests {
 
     /// A one-shot fake Herdr: answers `responses` in order, records requests.
     fn fake_herdr(responses: Vec<Value>) -> (PathBuf, std::thread::JoinHandle<Vec<Value>>) {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!("herdr-fingers-{unique}.sock"));
+        // Tests run in parallel threads, where clock readings can repeat; the
+        // pid keeps concurrent test binaries apart.
+        static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT_SOCKET.fetch_add(1, Ordering::Relaxed);
+        let path =
+            std::env::temp_dir().join(format!("herdr-fingers-{}-{n}.sock", std::process::id()));
+        // A socket left by an earlier run that had the same pid would block the bind.
+        let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path).unwrap();
         let handle = std::thread::spawn(move || {
             let mut requests = Vec::new();
