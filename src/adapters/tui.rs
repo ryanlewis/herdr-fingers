@@ -375,7 +375,7 @@ fn paint_help(buf: &mut Buffer, area: UiRect, view: &View<'_>) {
             "BACKSPACE        erase the last typed key",
             "ESC / q / ^C     close without picking",
             "",
-            "config: herdr plugin config-dir nathan-poncet.herdr-fingers",
+            "config: herdr plugin config-dir io.rlew.fingers",
         ]
         .map(String::from),
     );

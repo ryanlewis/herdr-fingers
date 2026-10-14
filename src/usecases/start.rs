@@ -67,11 +67,11 @@ mod tests {
     #[test]
     fn the_overlay_opens_with_the_focused_pane_geometry_in_its_environment() {
         let host = FakeHost::with_split_layout("w1:p2");
-        let started = start(&host, "nathan-poncet.herdr-fingers", "w1:p2", None).unwrap();
+        let started = start(&host, "io.rlew.fingers", "w1:p2", None).unwrap();
         assert_eq!(started, Started::Opened("w1:p9".into()));
         let opened = host.opened.borrow();
         let (plugin, entrypoint, env) = &opened[0];
-        assert_eq!(plugin, "nathan-poncet.herdr-fingers");
+        assert_eq!(plugin, "io.rlew.fingers");
         assert_eq!(entrypoint, OVERLAY_ENTRYPOINT);
         let geometry = OverlayGeometry::decode(&env[GEOMETRY_ENV]).unwrap();
         assert_eq!(geometry.pane_id, "w1:p2");

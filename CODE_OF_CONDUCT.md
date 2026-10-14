@@ -61,7 +61,7 @@ acting as an appointed representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may
 be reported to the maintainer through the contact listed on
-[github.com/nathan-poncet](https://github.com/nathan-poncet). All
+[github.com/ryanlewis](https://github.com/ryanlewis). All
 complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security
