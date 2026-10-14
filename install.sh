@@ -37,11 +37,13 @@ asset_name() {
 	echo "herdr-fingers-v$version-$suffix.tar.gz"
 }
 
+# Time limits make a stalled network fail, and so fall back to cargo,
+# instead of hanging the install.
 download() {
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL -o "$2" "$1"
+		curl -fsSL --connect-timeout 15 --max-time 300 -o "$2" "$1"
 	elif command -v wget >/dev/null 2>&1; then
-		wget -q -O "$2" "$1"
+		wget -q --timeout=30 --tries=2 -O "$2" "$1"
 	else
 		log "neither curl nor wget is installed"
 		return 1
