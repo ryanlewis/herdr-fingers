@@ -1,16 +1,30 @@
 //! In-memory stand-ins for the ports, shared by the use-case tests.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use super::ports::{Clipboard, Launcher, PaneHost, PickView, Picker, PortError};
+use super::ports::{
+    Clipboard, FileSystem, Launcher, PaneHost, PickView, Picker, PortError, SplitPane,
+};
 use crate::domain::geometry::{Layout, OverlayGeometry, PanePlacement, Rect};
+use crate::domain::open::{PathKind, Surroundings};
 use crate::domain::session::{Key, Outcome, Session};
-use crate::domain::settings::Actions;
+use crate::domain::settings::{Actions, SplitDirection};
 
 /// One `open_overlay` call: plugin id, entrypoint, environment.
 pub(crate) type OpenedOverlay = (String, String, BTreeMap<String, String>);
+
+/// One `open_split` call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OpenedSplit {
+    pub plugin_id: String,
+    pub entrypoint: String,
+    pub beside: String,
+    pub direction: SplitDirection,
+    pub cwd: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+}
 
 /// A host showing a fixed screen and recording everything asked of it.
 pub(crate) struct FakeHost {
@@ -23,6 +37,7 @@ pub(crate) struct FakeHost {
     pub sent: RefCell<Vec<(String, String)>>,
     pub notified: RefCell<Vec<(String, String)>>,
     pub opened: RefCell<Vec<OpenedOverlay>>,
+    pub splits: RefCell<Vec<OpenedSplit>>,
 }
 
 impl FakeHost {
@@ -37,6 +52,7 @@ impl FakeHost {
             sent: RefCell::new(Vec::new()),
             notified: RefCell::new(Vec::new()),
             opened: RefCell::new(Vec::new()),
+            splits: RefCell::new(Vec::new()),
         }
     }
 
@@ -118,6 +134,18 @@ impl PaneHost for FakeHost {
         Ok("w1:p9".to_string())
     }
 
+    fn open_split(&self, split: &SplitPane<'_>) -> Result<String, PortError> {
+        self.splits.borrow_mut().push(OpenedSplit {
+            plugin_id: split.plugin_id.to_string(),
+            entrypoint: split.entrypoint.to_string(),
+            beside: split.beside.to_string(),
+            direction: split.direction,
+            cwd: split.cwd.map(Path::to_path_buf),
+            env: split.env.clone(),
+        });
+        Ok("w1:p8".to_string())
+    }
+
     fn send_text(&self, pane_id: &str, text: &str) -> Result<(), PortError> {
         self.sent
             .borrow_mut()
@@ -156,6 +184,7 @@ pub(crate) struct Ran {
 #[derive(Default)]
 pub(crate) struct RecordingLauncher {
     pub opened: RefCell<Vec<(String, Option<PathBuf>)>>,
+    pub revealed: RefCell<Vec<PathBuf>>,
     pub ran: RefCell<Vec<Ran>>,
 }
 
@@ -164,6 +193,11 @@ impl Launcher for RecordingLauncher {
         self.opened
             .borrow_mut()
             .push((target.to_string(), cwd.map(Path::to_path_buf)));
+        Ok(())
+    }
+
+    fn reveal(&self, path: &Path) -> Result<(), PortError> {
+        self.revealed.borrow_mut().push(path.to_path_buf());
         Ok(())
     }
 
@@ -187,9 +221,46 @@ impl Launcher for RecordingLauncher {
     }
 }
 
-/// Feeds a fixed key sequence to the real session; cancels if it runs out.
+/// A file system holding only the paths it was given.
+#[derive(Default)]
+pub(crate) struct FakeFiles {
+    pub kinds: BTreeMap<PathBuf, PathKind>,
+    pub origin: Option<String>,
+    pub home: Option<PathBuf>,
+}
+
+impl FakeFiles {
+    pub fn with(mut self, path: &str, kind: PathKind) -> Self {
+        self.kinds.insert(PathBuf::from(path), kind);
+        self
+    }
+
+    pub fn with_origin(mut self, origin: &str) -> Self {
+        self.origin = Some(origin.to_string());
+        self
+    }
+}
+
+impl Surroundings for FakeFiles {
+    fn kind(&self, path: &Path) -> PathKind {
+        self.kinds.get(path).copied().unwrap_or(PathKind::Missing)
+    }
+
+    fn git_origin(&self, _dir: &Path) -> Option<String> {
+        self.origin.clone()
+    }
+}
+
+impl FileSystem for FakeFiles {
+    fn home_dir(&self) -> Option<PathBuf> {
+        self.home.clone()
+    }
+}
+
+/// Feeds a fixed key sequence to the real session, picking up where the
+/// previous call stopped; cancels when it runs out.
 pub(crate) struct ScriptedPicker {
-    keys: Vec<Key>,
+    keys: VecDeque<Key>,
     pub seen_notice: Option<String>,
     pub seen_geometry: Option<OverlayGeometry>,
     pub seen_legend: Option<(Actions, bool)>,
@@ -198,7 +269,7 @@ pub(crate) struct ScriptedPicker {
 impl ScriptedPicker {
     pub fn new(keys: &[Key]) -> Self {
         ScriptedPicker {
-            keys: keys.to_vec(),
+            keys: keys.iter().copied().collect(),
             seen_notice: None,
             seen_geometry: None,
             seen_legend: None,
@@ -211,8 +282,8 @@ impl Picker for ScriptedPicker {
         self.seen_notice = view.notice.map(str::to_string);
         self.seen_geometry = view.geometry.cloned();
         self.seen_legend = Some((view.actions.clone(), view.show_legend));
-        for key in &self.keys {
-            match session.press(*key) {
+        while let Some(key) = self.keys.pop_front() {
+            match session.press(key) {
                 Outcome::Continue => {}
                 other => return Ok(other),
             }

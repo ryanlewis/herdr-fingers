@@ -6,8 +6,11 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::domain::alphabet::{Alphabet, AlphabetError};
+use crate::domain::open::{EditorCommand, EditorError, UrlTemplate, UrlTemplateError};
 use crate::domain::patterns::{self, PatternError, PatternSet, PatternSpec};
-use crate::domain::settings::{Action, Actions, ClipboardMode, HintPosition, Settings, Theme};
+use crate::domain::settings::{
+    Action, Actions, ClipboardMode, HintPosition, Settings, SplitDirection, Theme,
+};
 use crate::domain::style::{Color, ColorParseError, TextStyle};
 
 /// The commented default configuration, written on first run.
@@ -31,6 +34,14 @@ pub enum ConfigError {
     Pattern(#[from] PatternError),
     #[error("in [style]: {0}")]
     Color(#[from] ColorParseError),
+    #[error("in [[patterns]] `{name}`: {source}")]
+    OpenUrl {
+        name: String,
+        #[source]
+        source: UrlTemplateError,
+    },
+    #[error(transparent)]
+    Editor(#[from] EditorError),
     #[error("{0}")]
     Invalid(String),
 }
@@ -55,6 +66,8 @@ struct FileConfig {
     log_picked_text: Option<bool>,
     show_legend: Option<bool>,
     multi_separator: Option<String>,
+    editor: Option<String>,
+    editor_split: Option<String>,
     #[serde(default)]
     style: StyleConfig,
 }
@@ -64,6 +77,7 @@ struct FileConfig {
 struct PatternEntry {
     name: String,
     regex: String,
+    open_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -152,11 +166,22 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         }
         None => patterns::builtin_specs(&patterns::builtin_names())?,
     };
-    let custom: Vec<PatternSpec> = file
+    let custom = file
         .patterns
         .iter()
-        .map(|entry| PatternSpec::new(entry.name.clone(), entry.regex.clone()))
-        .collect();
+        .map(|entry| {
+            let spec = PatternSpec::new(entry.name.clone(), entry.regex.clone());
+            match &entry.open_url {
+                None => Ok(spec),
+                Some(template) => UrlTemplate::parse(template)
+                    .map(|template| spec.opening(template))
+                    .map_err(|source| ConfigError::OpenUrl {
+                        name: entry.name.clone(),
+                        source,
+                    }),
+            }
+        })
+        .collect::<Result<Vec<PatternSpec>, ConfigError>>()?;
     specs.splice(0..0, custom);
     let pattern_set = PatternSet::compile(&specs)?;
 
@@ -180,6 +205,17 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
             )));
         }
     };
+
+    let editor_split = match file.editor_split.as_deref().map(str::trim) {
+        None | Some("right") => SplitDirection::Right,
+        Some("down") => SplitDirection::Down,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "editor_split must be \"right\" or \"down\", got \"{other}\""
+            )));
+        }
+    };
+    let editor = file.editor.as_deref().map(editor_command).transpose()?;
 
     let default_theme = Theme::default();
     let style =
@@ -231,7 +267,24 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         log_picked_text: file.log_picked_text.unwrap_or(defaults.log_picked_text),
         show_legend: file.show_legend.unwrap_or(defaults.show_legend),
         multi_separator: file.multi_separator.unwrap_or(defaults.multi_separator),
+        editor,
+        editor_split,
     })
+}
+
+/// An editor command line, `editor` in the config or `$VISUAL`/`$EDITOR`.
+pub fn editor_command(template: &str) -> Result<EditorCommand, ConfigError> {
+    let words = shell_words::split(template)
+        .map_err(|error| ConfigError::Invalid(format!("editor: {error}")))?;
+    Ok(EditorCommand::new(template, words)?)
+}
+
+/// The editor from the environment when the config names none.
+pub fn editor_from_env() -> Option<EditorCommand> {
+    ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find_map(|template| editor_command(&template).ok())
 }
 
 #[cfg(test)]
@@ -253,6 +306,60 @@ mod tests {
         assert_eq!(parsed.log_picked_text, defaults.log_picked_text);
         assert_eq!(parsed.show_legend, defaults.show_legend);
         assert_eq!(parsed.multi_separator, defaults.multi_separator);
+        assert_eq!(parsed.editor, defaults.editor);
+        assert_eq!(parsed.editor_split, defaults.editor_split);
+    }
+
+    #[test]
+    fn a_pattern_open_url_and_the_editor_are_read() {
+        let parsed = parse(
+            r#"
+editor = "nvim -p"
+editor_split = "down"
+[[patterns]]
+name = "jira"
+regex = "\\b(?P<match>[A-Z][A-Z0-9]+-[0-9]+)\\b"
+open_url = "https://example.atlassian.net/browse/{}"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.patterns.open_url("jira"),
+            Some(&UrlTemplate::parse("https://example.atlassian.net/browse/{}").unwrap())
+        );
+        assert_eq!(parsed.editor_split, SplitDirection::Down);
+        let editor = parsed.editor.unwrap();
+        assert_eq!(editor.template(), "nvim -p");
+        assert_eq!(editor.argv("/x", Some(2)), vec!["nvim", "-p", "+2", "/x"]);
+    }
+
+    #[test]
+    fn a_bad_open_url_or_editor_is_refused() {
+        let pattern = |open_url: &str| {
+            parse(&format!(
+                "[[patterns]]\nname = \"t\"\nregex = \"T\"\nopen_url = \"{open_url}\""
+            ))
+        };
+        assert!(matches!(
+            pattern("file:///{}"),
+            Err(ConfigError::OpenUrl { name, .. }) if name == "t"
+        ));
+        assert!(matches!(
+            pattern("https://x/browse"),
+            Err(ConfigError::OpenUrl { .. })
+        ));
+        assert!(matches!(
+            parse("editor = \"\""),
+            Err(ConfigError::Editor(_))
+        ));
+        assert!(matches!(
+            parse("editor = \"vim 'unclosed\""),
+            Err(ConfigError::Invalid(_))
+        ));
+        assert!(matches!(
+            parse("editor_split = \"left\""),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]

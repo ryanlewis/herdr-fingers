@@ -6,6 +6,7 @@ pub mod ansi;
 pub mod geometry;
 pub mod hints;
 pub mod matcher;
+pub mod open;
 pub mod patterns;
 pub mod screen;
 pub mod session;
