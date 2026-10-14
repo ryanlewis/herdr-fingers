@@ -9,7 +9,7 @@ use ratatui::layout::Rect as UiRect;
 use ratatui::style::{Color as UiColor, Modifier as UiModifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::domain::geometry::{OverlayGeometry, Rect};
 use crate::domain::screen::Screen;
@@ -302,10 +302,7 @@ fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
         let cut = text.rfind(" · ").expect("checked above");
         text.truncate(cut);
     }
-    let text: String = text
-        .chars()
-        .take(usize::from(area.width).saturating_sub(1))
-        .collect();
+    let text = truncate_to_width(&text, usize::from(area.width).saturating_sub(1));
     let style = Style::default()
         .fg(UiColor::Indexed(8))
         .add_modifier(UiModifier::ITALIC);
@@ -313,6 +310,16 @@ fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
         .right()
         .saturating_sub(u16::try_from(text.width()).unwrap_or(0) + 1);
     buf.set_string(x.max(area.x), area.y, text, style);
+}
+
+fn truncate_to_width(text: &str, max: usize) -> String {
+    let mut width = 0;
+    text.chars()
+        .take_while(|ch| {
+            width += ch.width().unwrap_or(0);
+            width <= max
+        })
+        .collect()
 }
 
 /// One entry per modifier that does something, in the order the help lists
@@ -626,6 +633,37 @@ mod tests {
     fn a_narrow_status_line_keeps_the_notice_and_the_first_legend_entries() {
         let line = status_line(Some(&legend_actions()), Some("config.toml ignored"), 50);
         assert_eq!(line, "⚠ config.toml ignored · hint open · ⇧ paste");
+    }
+
+    #[test]
+    fn a_wide_legend_entry_stays_inside_its_strip() {
+        let actions = Actions {
+            main: Action::Shell("日本語日本語日本語日本語日本語日本語".into()),
+            ..legend_actions()
+        };
+        let screen = Screen::from_ansi("\n\n\n\nhello world", 20);
+        let session = session_for(&screen);
+        let theme = Theme::default();
+        let layout = Layout {
+            area: Rect::new(0, 0, 40, 10),
+            zoomed: false,
+            panes: vec![PanePlacement {
+                pane_id: "p".into(),
+                rect: Rect::new(20, 5, 20, 5),
+            }],
+        };
+        let geometry = OverlayGeometry::locate(&layout, "p").unwrap();
+        let view = View {
+            screen: &screen,
+            session: &session,
+            theme: &theme,
+            geometry: Some(&geometry),
+            notice: None,
+            legend: Some(&actions),
+        };
+        let buf = draw(&view, 40, 10);
+        let pane_part: String = (20..40).map(|x| buf[(x, 9)].symbol().to_string()).collect();
+        assert_eq!(pane_part.trim_end(), "hello world");
     }
 
     #[test]
