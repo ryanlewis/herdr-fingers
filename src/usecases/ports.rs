@@ -71,8 +71,9 @@ pub struct PickView<'a> {
     pub geometry: Option<&'a OverlayGeometry>,
     /// A one-line notice (configuration problem…).
     pub notice: Option<&'a str>,
-    /// The actions to list in the status line; `None` hides the legend.
-    pub legend: Option<&'a Actions>,
+    pub actions: &'a Actions,
+    /// Whether the status line lists what each modifier does.
+    pub show_legend: bool,
 }
 
 /// The interactive part: shows the hints, feeds keys to the session, and
