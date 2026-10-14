@@ -7,6 +7,10 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+### Changed
+- The log no longer holds the text you pick. It records the action and the
+  length; `log_picked_text = true` brings the preview back.
+
 ## [0.1.0] - 2026-09-22
 
 ### Added

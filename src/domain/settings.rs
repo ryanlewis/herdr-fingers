@@ -120,6 +120,7 @@ pub struct Settings {
     pub clipboard: ClipboardMode,
     pub clipboard_command: Vec<String>,
     pub notify_on_copy: bool,
+    pub log_picked_text: bool,
     pub multi_separator: String,
 }
 
@@ -133,6 +134,7 @@ impl Default for Settings {
             clipboard: ClipboardMode::default(),
             clipboard_command: Vec::new(),
             notify_on_copy: false,
+            log_picked_text: false,
             multi_separator: " ".to_string(),
         }
     }

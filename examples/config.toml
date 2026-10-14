@@ -56,6 +56,9 @@ clipboard = "osc52"
 # ([ui.toast] delivery = "herdr" in ~/.config/herdr/config.toml).
 show_copied_notification = false
 
+# Put the picked text in the log. Off: the log holds only the action and the length.
+log_picked_text = false
+
 # Joins the texts picked in multi-select mode (Tab).
 multi_separator = " "
 

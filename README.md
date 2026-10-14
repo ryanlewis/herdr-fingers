@@ -155,6 +155,13 @@ Herdr can show a toast when a pane sets the clipboard
 (`[ui.toast.clipboard]` in Herdr's config); `show_copied_notification = true`
 adds a toast with the copied text through Herdr's notification system.
 
+### Privacy
+
+The log (`herdr-fingers.log` in the plugin's state directory) records what was
+done and how much, such as `copied 1 item (42 chars)`, never the picked text.
+Errors from `open` name the opener and not the target. Set
+`log_picked_text = true` to log a short preview of the text as well.
+
 ### Layouts
 
 `keyboard_layout` takes the tmux-fingers layouts — `qwerty`, `azerty`,

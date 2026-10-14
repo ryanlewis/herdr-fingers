@@ -91,19 +91,22 @@ fn dispatch(
             if settings.notify_on_copy
                 && let Err(error) = deps.host.notify("Copied", &preview(&text))
             {
-                return Ok(format!("copied {} (toast failed: {error})", preview(&text)));
+                return Ok(format!(
+                    "{} (toast failed: {error})",
+                    record("copied", selection, &text, settings)
+                ));
             }
-            Ok(format!("copied {}", preview(&text)))
+            Ok(record("copied", selection, &text, settings))
         }
         Action::Paste => {
             deps.host.send_text(request.pane_id, &text)?;
-            Ok(format!("pasted {}", preview(&text)))
+            Ok(record("pasted", selection, &text, settings))
         }
         Action::Open => {
             for item in &selection.texts {
                 deps.launcher.open(item, cwd)?;
             }
-            Ok(format!("opened {}", preview(&text)))
+            Ok(record("opened", selection, &text, settings))
         }
         Action::Shell(command_line) => {
             let env = [
@@ -115,6 +118,17 @@ fn dispatch(
         }
         Action::Nothing => Ok(String::new()),
     }
+}
+
+/// The log line for a finished action. The picked text only goes in when the
+/// user asked for it, since it can be a token or a password.
+fn record(verb: &str, selection: &Selection, text: &str, settings: &Settings) -> String {
+    if settings.log_picked_text {
+        return format!("{verb} {}", preview(text));
+    }
+    let count = selection.texts.len();
+    let noun = if count == 1 { "item" } else { "items" };
+    format!("{verb} {count} {noun} ({} chars)", text.chars().count())
 }
 
 /// The first line of `text`, shortened for a status line or a toast.
@@ -201,11 +215,32 @@ mod tests {
     fn typing_a_hint_copies_its_text_and_touches_nothing_else() {
         let mut world = World::new(&[Key::Hint('s', Modifier::Main)]);
         let picked = world.run(&settings(), Some(&geometry()), None);
-        assert_eq!(picked, Picked::Done("copied /etc/hosts".into()));
+        assert_eq!(picked, Picked::Done("copied 1 item (10 chars)".into()));
         assert_eq!(world.clipboard.copied, vec!["/etc/hosts"]);
         assert!(world.host.sent.borrow().is_empty());
         assert!(world.launcher.opened.borrow().is_empty());
         assert!(world.host.notified.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_log_line_shows_the_text_only_when_asked_to() {
+        let mut settings = settings();
+        settings.log_picked_text = true;
+        let mut world = World::new(&[Key::Hint('s', Modifier::Main)]);
+        let picked = world.run(&settings, Some(&geometry()), None);
+        assert_eq!(picked, Picked::Done("copied /etc/hosts".into()));
+    }
+
+    #[test]
+    fn a_multi_select_log_line_counts_the_items() {
+        let mut world = World::new(&[
+            Key::Tab,
+            Key::Hint('a', Modifier::Main),
+            Key::Hint('s', Modifier::Main),
+            Key::Enter,
+        ]);
+        let picked = world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(picked, Picked::Done("copied 2 items (28 chars)".into()));
     }
 
     #[test]
