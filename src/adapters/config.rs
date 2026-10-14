@@ -53,6 +53,7 @@ struct FileConfig {
     clipboard_command: Vec<String>,
     show_copied_notification: Option<bool>,
     log_picked_text: Option<bool>,
+    show_legend: Option<bool>,
     multi_separator: Option<String>,
     #[serde(default)]
     style: StyleConfig,
@@ -228,6 +229,7 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
             .show_copied_notification
             .unwrap_or(defaults.notify_on_copy),
         log_picked_text: file.log_picked_text.unwrap_or(defaults.log_picked_text),
+        show_legend: file.show_legend.unwrap_or(defaults.show_legend),
         multi_separator: file.multi_separator.unwrap_or(defaults.multi_separator),
     })
 }
@@ -249,6 +251,7 @@ mod tests {
         assert_eq!(parsed.clipboard_command, defaults.clipboard_command);
         assert_eq!(parsed.notify_on_copy, defaults.notify_on_copy);
         assert_eq!(parsed.log_picked_text, defaults.log_picked_text);
+        assert_eq!(parsed.show_legend, defaults.show_legend);
         assert_eq!(parsed.multi_separator, defaults.multi_separator);
     }
 
@@ -285,6 +288,7 @@ main_action = ":paste:"
 alt_action = "xargs open"
 show_copied_notification = true
 log_picked_text = true
+show_legend = false
 multi_separator = "\n"
 [style]
 hint = { fg = "#ff0000", bg = "0", bold = true, underline = true }
@@ -300,6 +304,7 @@ backdrop = { dim = true }
         assert_eq!(parsed.actions.alt, Action::Shell("xargs open".into()));
         assert!(parsed.notify_on_copy);
         assert!(parsed.log_picked_text);
+        assert!(!parsed.show_legend);
         assert_eq!(parsed.multi_separator, "\n");
         assert_eq!(parsed.theme.hint.fg, Some(Color::Rgb(255, 0, 0)));
         assert!(parsed.theme.hint.underline);

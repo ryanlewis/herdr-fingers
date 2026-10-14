@@ -7,6 +7,11 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+### Added
+- The overlay's status line lists what each key does, built from the
+  configured actions (`hint copy · ⇧ paste · ⌃ open …`). Turn it off with
+  `show_legend = false`.
+
 ### Changed
 - The log no longer holds the text you pick. It records the action and the
   length; `log_picked_text = true` brings the preview back.

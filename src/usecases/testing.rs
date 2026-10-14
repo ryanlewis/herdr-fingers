@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use super::ports::{Clipboard, Launcher, PaneHost, PickView, Picker, PortError};
 use crate::domain::geometry::{Layout, OverlayGeometry, PanePlacement, Rect};
 use crate::domain::session::{Key, Outcome, Session};
+use crate::domain::settings::Actions;
 
 /// One `open_overlay` call: plugin id, entrypoint, environment.
 pub(crate) type OpenedOverlay = (String, String, BTreeMap<String, String>);
@@ -191,6 +192,7 @@ pub(crate) struct ScriptedPicker {
     keys: Vec<Key>,
     pub seen_notice: Option<String>,
     pub seen_geometry: Option<OverlayGeometry>,
+    pub seen_legend: Option<Actions>,
 }
 
 impl ScriptedPicker {
@@ -199,6 +201,7 @@ impl ScriptedPicker {
             keys: keys.to_vec(),
             seen_notice: None,
             seen_geometry: None,
+            seen_legend: None,
         }
     }
 }
@@ -207,6 +210,7 @@ impl Picker for ScriptedPicker {
     fn pick(&mut self, view: &PickView<'_>, session: &mut Session) -> Result<Outcome, PortError> {
         self.seen_notice = view.notice.map(str::to_string);
         self.seen_geometry = view.geometry.cloned();
+        self.seen_legend = view.legend.cloned();
         for key in &self.keys {
             match session.press(*key) {
                 Outcome::Continue => {}

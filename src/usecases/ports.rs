@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::domain::geometry::{Layout, OverlayGeometry};
 use crate::domain::screen::Screen;
 use crate::domain::session::{Outcome, Session};
-use crate::domain::settings::Theme;
+use crate::domain::settings::{Actions, Theme};
 
 /// An adapter failed; the message is already fit for a human.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -71,6 +71,8 @@ pub struct PickView<'a> {
     pub geometry: Option<&'a OverlayGeometry>,
     /// A one-line notice (configuration problem…).
     pub notice: Option<&'a str>,
+    /// The actions to list in the status line; `None` hides the legend.
+    pub legend: Option<&'a Actions>,
 }
 
 /// The interactive part: shows the hints, feeds keys to the session, and

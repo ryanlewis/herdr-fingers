@@ -65,6 +65,10 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
         theme: &request.settings.theme,
         geometry: request.geometry,
         notice: request.notice,
+        legend: request
+            .settings
+            .show_legend
+            .then_some(&request.settings.actions),
     };
     match deps.picker.pick(&view, &mut session)? {
         Outcome::Picked(selection) => {
@@ -332,6 +336,20 @@ mod tests {
         assert_eq!(world.picker.seen_notice, Some("config.toml ignored".into()));
         assert_eq!(world.picker.seen_geometry, Some(geometry()));
         assert!(world.host.layout_calls.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_configured_actions_reach_the_picker_unless_the_legend_is_off() {
+        let mut settings = settings();
+        settings.actions.alt = Action::Shell("xargs nvim".into());
+        let mut world = World::new(&[Key::Escape]);
+        world.run(&settings, Some(&geometry()), None);
+        assert_eq!(world.picker.seen_legend, Some(settings.actions.clone()));
+
+        settings.show_legend = false;
+        let mut world = World::new(&[Key::Escape]);
+        world.run(&settings, Some(&geometry()), None);
+        assert_eq!(world.picker.seen_legend, None);
     }
 
     #[test]

@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::domain::geometry::{OverlayGeometry, Rect};
 use crate::domain::screen::Screen;
 use crate::domain::session::{Key, Modifier, Outcome, Session, Target};
-use crate::domain::settings::{HintPosition, Theme};
+use crate::domain::settings::{Actions, HintPosition, Theme};
 use crate::domain::style::{Color, TextStyle};
 use crate::usecases::ports::{PickView, Picker, PortError};
 
@@ -26,6 +26,8 @@ pub struct View<'a> {
     pub geometry: Option<&'a OverlayGeometry>,
     /// A one-line notice (configuration problem, nothing to pick…).
     pub notice: Option<&'a str>,
+    /// The actions to list in the status line; `None` hides the legend.
+    pub legend: Option<&'a Actions>,
 }
 
 const MIN_STATUS_WIDTH: u16 = 24;
@@ -36,7 +38,15 @@ pub struct TerminalPicker;
 
 impl Picker for TerminalPicker {
     fn pick(&mut self, view: &PickView<'_>, session: &mut Session) -> Result<Outcome, PortError> {
-        run(view.screen, session, view.theme, view.geometry, view.notice).map_err(PortError::new)
+        run(
+            view.screen,
+            session,
+            view.theme,
+            view.geometry,
+            view.notice,
+            view.legend,
+        )
+        .map_err(PortError::new)
     }
 }
 
@@ -47,6 +57,7 @@ pub fn run(
     theme: &Theme,
     geometry: Option<&OverlayGeometry>,
     notice: Option<&str>,
+    legend: Option<&Actions>,
 ) -> io::Result<Outcome> {
     let mut terminal = ratatui::init();
     let outcome = loop {
@@ -57,6 +68,7 @@ pub fn run(
                 theme,
                 geometry,
                 notice,
+                legend,
             };
             render(frame.area(), frame.buffer_mut(), &view);
         })?;
@@ -281,6 +293,9 @@ fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
     if !session.input().is_empty() {
         parts.push(format!("typed: {}", session.input()));
     }
+    if let Some(actions) = view.legend {
+        parts.extend(legend_entries(actions));
+    }
     parts.push("tab multi · esc quit · ? help".to_string());
     let mut text = parts.join(" · ");
     while text.width() > usize::from(area.width).saturating_sub(2) && text.contains(" · ") {
@@ -298,6 +313,23 @@ fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
         .right()
         .saturating_sub(u16::try_from(text.width()).unwrap_or(0) + 1);
     buf.set_string(x.max(area.x), area.y, text, style);
+}
+
+/// One entry per modifier that does something, in the order the help lists
+/// them: `hint copy`, `⇧ paste`…
+fn legend_entries(actions: &Actions) -> Vec<String> {
+    [
+        (Modifier::Main, "hint"),
+        (Modifier::Shift, "⇧"),
+        (Modifier::Ctrl, "⌃"),
+        (Modifier::Alt, "⌥"),
+    ]
+    .into_iter()
+    .filter_map(|(modifier, key)| {
+        let label = actions.for_modifier(modifier).label()?;
+        Some(format!("{key} {label}"))
+    })
+    .collect()
 }
 
 fn paint_help(buf: &mut Buffer, area: UiRect, theme: &Theme) {
@@ -390,6 +422,7 @@ mod tests {
     use crate::domain::geometry::{Layout, PanePlacement};
     use crate::domain::matcher::find_candidates;
     use crate::domain::patterns::PatternSet;
+    use crate::domain::settings::Action;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -427,6 +460,7 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 40, 3);
         assert_eq!(row_text(&buf, 0), "edit setc/hosts now");
@@ -456,6 +490,7 @@ mod tests {
             theme: &theme,
             geometry: Some(&geometry),
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 40, 10);
         assert_eq!(row_text(&buf, 5), format!("{}green atmp/x", " ".repeat(20)));
@@ -479,6 +514,7 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 60, 2);
         let line = row_text(&buf, 0);
@@ -501,6 +537,7 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 40, 2);
         assert_eq!(row_text(&buf, 0), "x /etc/hosta");
@@ -517,6 +554,7 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 60, 7);
         let all: String = (0..7)
@@ -534,6 +572,7 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
+            legend: None,
         };
         let buf = draw(&view, 80, 14);
         let all: String = (0..14)
@@ -541,6 +580,52 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(all.contains("toggle multi-select"), "{all}");
+    }
+
+    fn status_line(legend: Option<&Actions>, notice: Option<&str>, width: u16) -> String {
+        let screen = Screen::from_ansi("/tmp/x", width);
+        let session = session_for(&screen);
+        let theme = Theme::default();
+        let view = View {
+            screen: &screen,
+            session: &session,
+            theme: &theme,
+            geometry: None,
+            notice,
+            legend,
+        };
+        row_text(&draw(&view, width, 2), 1).trim_start().to_string()
+    }
+
+    fn legend_actions() -> Actions {
+        Actions {
+            main: Action::Open,
+            ctrl: Action::Shell("xargs nvim".into()),
+            shift: Action::Paste,
+            alt: Action::Nothing,
+        }
+    }
+
+    #[test]
+    fn the_legend_lists_what_each_modifier_does_and_skips_the_idle_ones() {
+        assert_eq!(
+            status_line(Some(&legend_actions()), None, 100),
+            "hint open · ⇧ paste · ⌃ xargs · tab multi · esc quit · ? help"
+        );
+    }
+
+    #[test]
+    fn without_a_legend_the_status_line_shows_only_the_overlay_keys() {
+        assert_eq!(
+            status_line(None, None, 100),
+            "tab multi · esc quit · ? help"
+        );
+    }
+
+    #[test]
+    fn a_narrow_status_line_keeps_the_notice_and_the_first_legend_entries() {
+        let line = status_line(Some(&legend_actions()), Some("config.toml ignored"), 50);
+        assert_eq!(line, "⚠ config.toml ignored · hint open · ⇧ paste");
     }
 
     #[test]

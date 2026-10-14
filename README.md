@@ -63,6 +63,14 @@ screen, where the freshest output is; identical texts share one hint.
 | `?` | help |
 | `Esc`, `q`, `Ctrl+C` | close |
 
+The status line lists what each key does with your configuration, for
+example `hint copy · ⇧ paste · ⌃ open · tab multi · esc quit · ? help`.
+`⇧`, `⌃` and `⌥` stand for Shift, Ctrl and Alt; a modifier bound to `""` is
+left out, and a command shows its program name. It sits outside the pane or
+after the text on the pane's last row, so it never covers a match. When the
+line is short of room, entries are dropped from the right; a configuration
+notice and the typed keys come first. Turn it off with `show_legend = false`.
+
 Typing the first key of a two-key hint hides every other hint. A URL or path
 the terminal wrapped over two rows is one hint, and copies without the line
 break. The overlay redraws the pane exactly where it is — with its own
