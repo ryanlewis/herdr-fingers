@@ -340,6 +340,13 @@ mod tests {
     fn the_configured_actions_and_the_legend_switch_reach_the_picker() {
         let mut settings = settings();
         settings.actions.alt = Action::Shell("xargs nvim".into());
+        let mut world = World::new(&[Key::Escape]);
+        world.run(&settings, Some(&geometry()), None);
+        assert_eq!(
+            world.picker.seen_legend,
+            Some((settings.actions.clone(), true))
+        );
+
         settings.show_legend = false;
         let mut world = World::new(&[Key::Escape]);
         world.run(&settings, Some(&geometry()), None);
