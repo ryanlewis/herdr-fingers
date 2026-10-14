@@ -82,6 +82,12 @@ install_release() {
 		log "$asset has no herdr-fingers binary"
 		return 1
 	}
+	# A binary built against a newer libc, or a 64-bit binary under a 32-bit
+	# userland, matches uname but cannot start.
+	"$unpacked" --version >/dev/null 2>&1 || {
+		log "the release binary does not run on this machine"
+		return 1
+	}
 	# `set -e` does not apply inside `install_release || ...`, hence the
 	# explicit chain. Copy then rename, so an interrupted install never leaves
 	# half a binary.
