@@ -192,7 +192,7 @@ pub(crate) struct ScriptedPicker {
     keys: Vec<Key>,
     pub seen_notice: Option<String>,
     pub seen_geometry: Option<OverlayGeometry>,
-    pub seen_legend: Option<Actions>,
+    pub seen_legend: Option<(Actions, bool)>,
 }
 
 impl ScriptedPicker {
@@ -210,7 +210,7 @@ impl Picker for ScriptedPicker {
     fn pick(&mut self, view: &PickView<'_>, session: &mut Session) -> Result<Outcome, PortError> {
         self.seen_notice = view.notice.map(str::to_string);
         self.seen_geometry = view.geometry.cloned();
-        self.seen_legend = view.legend.cloned();
+        self.seen_legend = Some((view.actions.clone(), view.show_legend));
         for key in &self.keys {
             match session.press(*key) {
                 Outcome::Continue => {}

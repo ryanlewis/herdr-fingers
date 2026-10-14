@@ -26,8 +26,9 @@ pub struct View<'a> {
     pub geometry: Option<&'a OverlayGeometry>,
     /// A one-line notice (configuration problem, nothing to pick…).
     pub notice: Option<&'a str>,
-    /// The actions to list in the status line; `None` hides the legend.
-    pub legend: Option<&'a Actions>,
+    pub actions: &'a Actions,
+    /// Whether the status line lists what each modifier does.
+    pub show_legend: bool,
 }
 
 const MIN_STATUS_WIDTH: u16 = 24;
@@ -44,7 +45,8 @@ impl Picker for TerminalPicker {
             view.theme,
             view.geometry,
             view.notice,
-            view.legend,
+            view.actions,
+            view.show_legend,
         )
         .map_err(PortError::new)
     }
@@ -57,7 +59,8 @@ pub fn run(
     theme: &Theme,
     geometry: Option<&OverlayGeometry>,
     notice: Option<&str>,
-    legend: Option<&Actions>,
+    actions: &Actions,
+    show_legend: bool,
 ) -> io::Result<Outcome> {
     let mut terminal = ratatui::init();
     let outcome = loop {
@@ -68,7 +71,8 @@ pub fn run(
                 theme,
                 geometry,
                 notice,
-                legend,
+                actions,
+                show_legend,
             };
             render(frame.area(), frame.buffer_mut(), &view);
         })?;
@@ -167,7 +171,7 @@ pub fn render(area: UiRect, buf: &mut Buffer, view: &View<'_>) {
         paint_status(buf, status, view);
     }
     if view.session.shows_help() {
-        paint_help(buf, area, view.theme);
+        paint_help(buf, area, view);
     } else if view.session.targets().is_empty() {
         paint_notice(buf, area, "Nothing to pick on this screen — press any key");
     }
@@ -283,26 +287,39 @@ fn status_rect(frame: Rect, content: Rect, view: &View<'_>) -> Option<Rect> {
 
 fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
     let session = view.session;
-    let mut parts: Vec<String> = Vec::new();
+    // Entries in display order, each with how long it survives on a short
+    // line: the lowest is dropped first.
+    let mut entries: Vec<(u8, String)> = Vec::new();
     if let Some(notice) = view.notice {
-        parts.push(format!("⚠ {notice}"));
+        entries.push((9, format!("⚠ {notice}")));
     }
     if session.is_multi() {
-        parts.push(format!("multi ({} picked)", session.selected_count()));
+        entries.push((8, format!("multi ({} picked)", session.selected_count())));
     }
     if !session.input().is_empty() {
-        parts.push(format!("typed: {}", session.input()));
+        entries.push((7, format!("typed: {}", session.input())));
     }
-    if let Some(actions) = view.legend {
-        parts.extend(legend_entries(actions));
+    if view.show_legend {
+        entries.extend(legend_entries(view.actions));
     }
-    parts.push("tab multi · esc quit · ? help".to_string());
-    let mut text = parts.join(" · ");
-    while text.width() > usize::from(area.width).saturating_sub(2) && text.contains(" · ") {
-        let cut = text.rfind(" · ").expect("checked above");
-        text.truncate(cut);
+    entries.push((3, "tab multi".to_string()));
+    entries.push((5, "esc quit".to_string()));
+    entries.push((6, "? help".to_string()));
+    let joined = |entries: &[(u8, String)]| {
+        entries
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    while joined(&entries).width() > usize::from(area.width).saturating_sub(2) && entries.len() > 1
+    {
+        let weakest = (0..entries.len())
+            .min_by_key(|&index| entries[index].0)
+            .expect("more than one entry");
+        entries.remove(weakest);
     }
-    let text = truncate_to_width(&text, usize::from(area.width).saturating_sub(1));
+    let text = truncate_to_width(&joined(&entries), usize::from(area.width).saturating_sub(1));
     let style = Style::default()
         .fg(UiColor::Indexed(8))
         .add_modifier(UiModifier::ITALIC);
@@ -322,35 +339,44 @@ fn truncate_to_width(text: &str, max: usize) -> String {
         .collect()
 }
 
-/// One entry per modifier that does something, in the order the help lists
-/// them: `hint copy`, `⇧ paste`…
-fn legend_entries(actions: &Actions) -> Vec<String> {
-    [
-        (Modifier::Main, "hint"),
-        (Modifier::Shift, "⇧"),
-        (Modifier::Ctrl, "⌃"),
-        (Modifier::Alt, "⌥"),
-    ]
-    .into_iter()
-    .filter_map(|(modifier, key)| {
-        let label = actions.for_modifier(modifier).label()?;
-        Some(format!("{key} {label}"))
-    })
-    .collect()
+/// Each modifier with its legend key, its name in the help, and how long
+/// its legend entry survives on a short line.
+const MODIFIER_KEYS: [(Modifier, &str, &str, u8); 4] = [
+    (Modifier::Main, "hint", "type a hint", 4),
+    (Modifier::Shift, "⇧", "SHIFT + hint", 2),
+    (Modifier::Ctrl, "⌃", "CTRL + hint", 1),
+    (Modifier::Alt, "⌥", "ALT + hint", 0),
+];
+
+/// One entry per modifier that does something: `hint copy`, `⇧ paste`…
+fn legend_entries(actions: &Actions) -> Vec<(u8, String)> {
+    MODIFIER_KEYS
+        .into_iter()
+        .filter_map(|(modifier, key, _, keep)| {
+            let label = actions.for_modifier(modifier).label()?;
+            Some((keep, format!("{key} {label}")))
+        })
+        .collect()
 }
 
-fn paint_help(buf: &mut Buffer, area: UiRect, theme: &Theme) {
-    let lines = [
-        "type a hint      pick the match under it",
-        "SHIFT + hint     shift action (default: paste into the pane)",
-        "CTRL + hint      ctrl action (default: open URL or file)",
-        "ALT + hint       alt action (default: none)",
-        "TAB              toggle multi-select; TAB or ENTER again to confirm",
-        "BACKSPACE        erase the last typed key",
-        "ESC / q / ^C     close without picking",
-        "",
-        "config: herdr plugin config-dir nathan-poncet.herdr-fingers",
-    ];
+fn paint_help(buf: &mut Buffer, area: UiRect, view: &View<'_>) {
+    let mut lines: Vec<String> = MODIFIER_KEYS
+        .into_iter()
+        .map(|(modifier, _, name, _)| {
+            let label = view.actions.for_modifier(modifier).label();
+            format!("{name:<16} {}", label.unwrap_or("nothing"))
+        })
+        .collect();
+    lines.extend(
+        [
+            "TAB              toggle multi-select; TAB or ENTER again to confirm",
+            "BACKSPACE        erase the last typed key",
+            "ESC / q / ^C     close without picking",
+            "",
+            "config: herdr plugin config-dir nathan-poncet.herdr-fingers",
+        ]
+        .map(String::from),
+    );
     let width = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 4;
     let height = lines.len() as u16 + 2;
     let popup = UiRect::new(
@@ -363,7 +389,9 @@ fn paint_help(buf: &mut Buffer, area: UiRect, theme: &Theme) {
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" herdr-fingers ")
-        .style(to_ui_style(theme.hint.over(TextStyle::PLAIN)).remove_modifier(UiModifier::BOLD));
+        .style(
+            to_ui_style(view.theme.hint.over(TextStyle::PLAIN)).remove_modifier(UiModifier::BOLD),
+        );
     let paragraph = Paragraph::new(
         lines
             .iter()
@@ -467,7 +495,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 40, 3);
         assert_eq!(row_text(&buf, 0), "edit setc/hosts now");
@@ -497,13 +526,14 @@ mod tests {
             theme: &theme,
             geometry: Some(&geometry),
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 40, 10);
         assert_eq!(row_text(&buf, 5), format!("{}green atmp/x", " ".repeat(20)));
         assert_eq!(buf[(20, 5)].style().fg, Some(UiColor::Indexed(2)));
         assert!(
-            row_text(&buf, 9).contains("tab multi"),
+            row_text(&buf, 9).contains("? help"),
             "{}",
             row_text(&buf, 9)
         );
@@ -521,7 +551,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 60, 2);
         let line = row_text(&buf, 0);
@@ -544,7 +575,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 40, 2);
         assert_eq!(row_text(&buf, 0), "x /etc/hosta");
@@ -561,7 +593,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 60, 7);
         let all: String = (0..7)
@@ -579,7 +612,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice: None,
-            legend: None,
+            actions: &Actions::default(),
+            show_legend: false,
         };
         let buf = draw(&view, 80, 14);
         let all: String = (0..14)
@@ -590,6 +624,7 @@ mod tests {
     }
 
     fn status_line(legend: Option<&Actions>, notice: Option<&str>, width: u16) -> String {
+        let defaults = Actions::default();
         let screen = Screen::from_ansi("/tmp/x", width);
         let session = session_for(&screen);
         let theme = Theme::default();
@@ -599,7 +634,8 @@ mod tests {
             theme: &theme,
             geometry: None,
             notice,
-            legend,
+            actions: legend.unwrap_or(&defaults),
+            show_legend: legend.is_some(),
         };
         row_text(&draw(&view, width, 2), 1).trim_start().to_string()
     }
@@ -630,9 +666,48 @@ mod tests {
     }
 
     #[test]
-    fn a_narrow_status_line_keeps_the_notice_and_the_first_legend_entries() {
+    fn a_narrow_status_line_drops_the_ctrl_and_alt_entries_before_quit_and_help() {
+        assert_eq!(
+            status_line(Some(&legend_actions()), None, 45),
+            "hint open · tab multi · esc quit · ? help"
+        );
+    }
+
+    #[test]
+    fn a_notice_outlasts_the_legend_and_the_overlay_keys() {
         let line = status_line(Some(&legend_actions()), Some("config.toml ignored"), 50);
-        assert_eq!(line, "⚠ config.toml ignored · hint open · ⇧ paste");
+        assert_eq!(line, "⚠ config.toml ignored · esc quit · ? help");
+    }
+
+    #[test]
+    fn the_help_describes_the_configured_actions() {
+        let screen = Screen::from_ansi("/tmp/x", 80);
+        let mut session = session_for(&screen);
+        session.press(Key::Help);
+        let theme = Theme::default();
+        let actions = legend_actions();
+        let view = View {
+            screen: &screen,
+            session: &session,
+            theme: &theme,
+            geometry: None,
+            notice: None,
+            actions: &actions,
+            show_legend: false,
+        };
+        let buf = draw(&view, 80, 14);
+        let all: String = (0..14)
+            .map(|y| row_text(&buf, y))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for line in [
+            "type a hint      open",
+            "SHIFT + hint     paste",
+            "CTRL + hint      xargs",
+            "ALT + hint       nothing",
+        ] {
+            assert!(all.contains(line), "{line} missing from\n{all}");
+        }
     }
 
     #[test]
@@ -659,7 +734,8 @@ mod tests {
             theme: &theme,
             geometry: Some(&geometry),
             notice: None,
-            legend: Some(&actions),
+            actions: &actions,
+            show_legend: true,
         };
         let buf = draw(&view, 40, 10);
         let pane_part: String = (20..40).map(|x| buf[(x, 9)].symbol().to_string()).collect();
