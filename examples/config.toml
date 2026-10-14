@@ -59,6 +59,9 @@ show_copied_notification = false
 # Put the picked text in the log. Off: the log holds only the action and the length.
 log_picked_text = false
 
+# List what each key does in the overlay's status line.
+show_legend = true
+
 # Joins the texts picked in multi-select mode (Tab).
 multi_separator = " "
 

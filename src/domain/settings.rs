@@ -29,6 +29,18 @@ impl Action {
             command => Action::Shell(command.to_string()),
         }
     }
+
+    /// A short name for the key legend: the keyword, or a command's program
+    /// name; `None` for nothing.
+    pub fn label(&self) -> Option<&str> {
+        match self {
+            Action::Copy => Some("copy"),
+            Action::Paste => Some("paste"),
+            Action::Open => Some("open"),
+            Action::Shell(command) => command.split_whitespace().next(),
+            Action::Nothing => None,
+        }
+    }
 }
 
 /// One action per modifier held while typing the hint.
@@ -121,6 +133,7 @@ pub struct Settings {
     pub clipboard_command: Vec<String>,
     pub notify_on_copy: bool,
     pub log_picked_text: bool,
+    pub show_legend: bool,
     pub multi_separator: String,
 }
 
@@ -135,6 +148,7 @@ impl Default for Settings {
             clipboard_command: Vec::new(),
             notify_on_copy: false,
             log_picked_text: false,
+            show_legend: true,
             multi_separator: " ".to_string(),
         }
     }
@@ -153,6 +167,15 @@ mod tests {
             Action::parse("xargs nvim"),
             Action::Shell("xargs nvim".into())
         );
+    }
+
+    #[test]
+    fn an_action_is_labelled_by_its_keyword_or_program_name() {
+        assert_eq!(Action::Copy.label(), Some("copy"));
+        assert_eq!(Action::Paste.label(), Some("paste"));
+        assert_eq!(Action::Open.label(), Some("open"));
+        assert_eq!(Action::Shell("xargs nvim".into()).label(), Some("xargs"));
+        assert_eq!(Action::Nothing.label(), None);
     }
 
     #[test]
