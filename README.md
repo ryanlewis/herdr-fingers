@@ -6,16 +6,14 @@ type the hint and it is on your clipboard. Hold Shift to type it into the
 pane instead, Ctrl to open it. No mouse, no selection dragging, no
 scrolling back to find the thing.
 
-[![CI](https://github.com/nathan-poncet/herdr-fingers/actions/workflows/ci.yml/badge.svg)](https://github.com/nathan-poncet/herdr-fingers/actions/workflows/ci.yml)
+[![CI](https://github.com/ryanlewis/herdr-fingers/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanlewis/herdr-fingers/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-2ea44f)](LICENSE)
 ![Herdr 0.7+](https://img.shields.io/badge/Herdr-0.7%2B-66b3ff)
 ![Linux and macOS](https://img.shields.io/badge/platform-Linux%20%7C%20macOS-c084fc)
 
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/S3V726AT7H)
-
 ![herdr-fingers in action: hints over a git status, a path pasted with Shift, two commits multi-selected, URLs labelled](assets/demo.gif)
 
-*Copy a path, paste another with Shift, multi-select two commits with Tab, label URLs. [Watch it as a video.](https://github.com/nathan-poncet/herdr-fingers/raw/main/assets/demo.mp4)*
+*Copy a path, paste another with Shift, multi-select two commits with Tab, label URLs. [Watch it as a video.](https://github.com/ryanlewis/herdr-fingers/raw/main/assets/demo.mp4)*
 
 A port of [tmux-fingers](https://github.com/Morantron/tmux-fingers) to
 Herdr, written in Rust from the ground up: same patterns, same keyboard
@@ -24,18 +22,23 @@ layouts, same actions and multi-select, running as a native Herdr plugin.
 ## Install
 
 ```sh
-herdr plugin install nathan-poncet/herdr-fingers
+herdr plugin install ryanlewis/herdr-fingers
 ```
 
-Herdr clones the repository and builds it (a Rust toolchain is required:
-[rustup.rs](https://rustup.rs)). Then bind a key in
-`~/.config/herdr/config.toml`:
+Herdr clones the repository and runs `install.sh`, which downloads the
+prebuilt binary for your platform from the matching GitHub release and
+checks its SHA-256. Prebuilt binaries cover macOS (Apple silicon and Intel)
+and Linux (x86_64 and aarch64). If there is no binary for your platform or
+the download fails, it builds from source with cargo instead (Rust from
+[rustup.rs](https://rustup.rs)).
+
+Then bind a key in `~/.config/herdr/config.toml`:
 
 ```toml
 [[keys.command]]
 key = "prefix+f"
 type = "plugin_action"
-command = "nathan-poncet.herdr-fingers.start"
+command = "io.rlew.fingers.start"
 description = "copy with hints"
 ```
 
@@ -105,7 +108,7 @@ wins; custom patterns come before all of them.
 The plugin writes a fully commented `config.toml` on first run. Find it with:
 
 ```sh
-herdr plugin config-dir nathan-poncet.herdr-fingers
+herdr plugin config-dir io.rlew.fingers
 ```
 
 Every key is optional — [`examples/config.toml`](examples/config.toml) lists
@@ -192,9 +195,9 @@ for hints, so they cannot collide with the overlay's controls.
 
 ```sh
 herdr plugin list                                            # is it there and enabled?
-herdr plugin action list --plugin nathan-poncet.herdr-fingers
-herdr plugin log list --plugin nathan-poncet.herdr-fingers   # what Herdr saw when it ran the action
-tail "$(herdr plugin config-dir nathan-poncet.herdr-fingers | sed 's#/config/#/state/#')/herdr-fingers.log"
+herdr plugin action list --plugin io.rlew.fingers
+herdr plugin log list --plugin io.rlew.fingers               # what Herdr saw when it ran the action
+tail "$(herdr plugin config-dir io.rlew.fingers | sed 's#/config/#/state/#')/herdr-fingers.log"
 ```
 
 Nothing happens on the key? Check the action id in your `[[keys.command]]`
@@ -212,12 +215,13 @@ herdr-fingers scan --width <pane width> < dump.txt      # hint, row:col, text
 ## Requirements
 
 - Herdr 0.7 or newer, on Linux or macOS
-- A Rust toolchain (1.85+) to build — `herdr plugin install` runs `cargo build --release`
+- A Rust toolchain (1.85+) only when no prebuilt binary fits, or to build
+  from source
 
 ## Build from source
 
 ```sh
-git clone https://github.com/nathan-poncet/herdr-fingers.git
+git clone https://github.com/ryanlewis/herdr-fingers.git
 cd herdr-fingers
 cargo build --release
 herdr plugin link "$PWD"
@@ -244,9 +248,10 @@ Everyone taking part is held to the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Credits
 
-[tmux-fingers](https://github.com/Morantron/tmux-fingers) by Jorge Morante
-is the original: the patterns, the keyboard layouts, the modifier actions
-and the multi-select all come from it. Thank you.
+Based on [herdr-fingers](https://github.com/nathan-poncet/herdr-fingers) by
+Nathan Poncet, itself a port of
+[tmux-fingers](https://github.com/Morantron/tmux-fingers). MIT licensed; see
+[LICENSE](LICENSE).
 
 ## License
 

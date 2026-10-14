@@ -50,8 +50,9 @@ fn the_start_action_runs_the_release_binary() {
         Some("./target/release/herdr-fingers")
     );
     assert_eq!(start["command"][1].as_str(), Some("start"));
-    let build = manifest["build"][0]["command"]
-        .as_array()
-        .expect("a build command");
-    assert!(build.iter().any(|arg| arg.as_str() == Some("--release")));
+    assert_eq!(
+        manifest["build"][0]["command"][0].as_str(),
+        Some("./install.sh"),
+        "install.sh puts the binary at ./target/release, downloaded or built"
+    );
 }

@@ -6,7 +6,7 @@ page is everything you need to get a green PR on the first try.
 ## Setup
 
 ```sh
-git clone https://github.com/nathan-poncet/herdr-fingers.git
+git clone https://github.com/ryanlewis/herdr-fingers.git
 cd herdr-fingers
 cargo build --release
 herdr plugin link "$PWD"          # Herdr now runs your build on prefix+f
@@ -14,7 +14,7 @@ herdr plugin link "$PWD"          # Herdr now runs your build on prefix+f
 
 `herdr plugin link` points Herdr at this checkout; rebuild with
 `cargo build --release` and the next `prefix+f` uses the new binary. Unlink
-with `herdr plugin unlink nathan-poncet.herdr-fingers`.
+with `herdr plugin unlink io.rlew.fingers`.
 
 Useful while developing:
 
@@ -119,9 +119,11 @@ change the commands, read the hints off a first recording and adjust.
    `Cargo.lock` follows.
 3. Commit (`🔖 Release x.y.z`), tag `vx.y.z`, push the tag. The release
    workflow tests, builds Linux and macOS archives, and publishes a GitHub
-   release with the CHANGELOG section as notes.
+   release with the CHANGELOG section as notes. `install.sh` downloads the
+   archive matching the manifest version from that release, and builds with
+   cargo until it exists.
 
-Herdr users get the new version with `herdr plugin install nathan-poncet/herdr-fingers`
+Herdr users get the new version with `herdr plugin install ryanlewis/herdr-fingers`
 (pin one with `--ref vx.y.z`); the marketplace picks it up within the hour.
 
 ## Reporting bugs & proposing features
