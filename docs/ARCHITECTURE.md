@@ -19,20 +19,21 @@ Source dependencies point inward only. `tests/dependency_rule.rs` greps
 | Kernel | `src/domain/` | `ansi`, `screen`, `patterns`, `matcher`, `hints`, `alphabet`, `session`, `geometry`, `settings`, `style` | `regex`, `unicode-width`, `thiserror` |
 | Use cases | `src/usecases/` | `ports` (the traits), `start`, `pick`, `testing` (fakes) | the kernel |
 | Adapters | `src/adapters/` | `herdr` implements `PaneHost`, `tui` implements `Picker`, `clipboard` implements `Clipboard`, `system` implements `Launcher`; `config` and `log` | the ports, the world |
-| Composition root | `src/app.rs`, `src/main.rs` | one function per subcommand: `start`, `ui`, `scan` | anything |
+| Composition root | `src/app.rs`, `src/main.rs` | one function per subcommand: `start`, `ui`, `edit`, `scan` | anything |
 
 ## Ports
 
-Four traits in `usecases/ports.rs`, one per kind of side effect the use
+Five traits in `usecases/ports.rs`, one per kind of side effect the use
 cases need. Each has a real adapter and an in-memory fake in
 `usecases/testing.rs`.
 
 | Port | Real adapter | Fake | Methods |
 |---|---|---|---|
-| `PaneHost` | `HerdrClient` (socket API) | `FakeHost` | `layout`, `read_visible`, `pane_label`, `pane_cwd`, `open_overlay`, `send_text`, `notify` |
+| `PaneHost` | `HerdrClient` (socket API) | `FakeHost` | `layout`, `read_visible`, `pane_label`, `pane_cwd`, `open_overlay`, `open_split`, `send_text`, `notify` |
 | `Picker` | `TerminalPicker` (ratatui event loop) | `ScriptedPicker` (feeds keys to the real `Session`) | `pick(view, session) -> Outcome` |
 | `Clipboard` | `SystemClipboard` (OSC 52 and/or a command) | `RecordingClipboard` | `copy(text)` |
-| `Launcher` | `SystemLauncher` (`open`/`xdg-open`, shell command lines) | `RecordingLauncher` | `open(target, cwd)`, `run(command_line, stdin, env, cwd)` |
+| `Launcher` | `SystemLauncher` (`open`/`xdg-open`, shell command lines) | `RecordingLauncher` | `open(target, cwd)`, `reveal(path)`, `run(command_line, stdin, env, cwd)` |
+| `FileSystem` | `SystemFiles` (file metadata, `git remote get-url`) | `FakeFiles` | `kind(path)`, `git_origin(dir)`, `home_dir` |
 
 Errors cross a port as `PortError(String)`: by the time they reach a use
 case there is nothing to do but show them.
@@ -54,7 +55,7 @@ prefix+f
         6. Screen::from_ansi → logical lines → PatternSet::find → Candidates
         7. Session::new       hints assigned (bottom first, identical texts shared)
         8. picker.pick        draw · read key · Session::press … until Picked/Cancelled
-        9. dispatch           Copy → clipboard · Paste → host.send_text · Open → launcher.open · Shell → launcher.run
+        9. dispatch           Copy → clipboard · Paste → host.send_text · Open → open::resolve, then launcher.open / launcher.reveal / host.open_split (editor) · Shell → launcher.run
   └─ the process exits; Herdr closes the overlay and restores focus and zoom
 ```
 
@@ -82,6 +83,11 @@ keeps running meanwhile). It is encoded by hand
   so `.+` never copies padding.
 - **`matcher`** — runs the patterns over the logical lines and returns
   `Candidate { text, pattern, segments }` in reading order.
+- **`open`** — `resolve`: what `:open:` does with a picked text (a URL, a
+  folder, a file to edit at a line, something to reveal, or a refusal), from
+  the text, its pattern, the pattern's `open_url` and facts asked of a
+  `Surroundings` (path kinds, the Git `origin`). Also `UrlTemplate` and
+  `EditorCommand`.
 - **`hints`** — prefix-free labels over an alphabet: single keys first, then
   the worst key is expanded into two-key labels, and so on. Sorted shortest
   first, then by key preference.
