@@ -291,18 +291,20 @@ fn paint_status(buf: &mut Buffer, area: Rect, view: &View<'_>) {
     // line: the lowest is dropped first.
     let mut entries: Vec<(u8, String)> = Vec::new();
     if let Some(notice) = view.notice {
-        entries.push((9, format!("⚠ {notice}")));
+        entries.push((10, format!("⚠ {notice}")));
     }
     if session.is_multi() {
-        entries.push((8, format!("multi ({} picked)", session.selected_count())));
+        entries.push((9, format!("multi ({} picked)", session.selected_count())));
     }
     if !session.input().is_empty() {
-        entries.push((7, format!("typed: {}", session.input())));
+        entries.push((8, format!("typed: {}", session.input())));
     }
     if view.show_legend {
         entries.extend(legend_entries(view.actions));
     }
-    entries.push((3, "tab multi".to_string()));
+    // Tab is what confirms a multi-select, so it matters most then.
+    let tab_keep = if session.is_multi() { 7 } else { 3 };
+    entries.push((tab_keep, "tab multi".to_string()));
     entries.push((5, "esc quit".to_string()));
     entries.push((6, "? help".to_string()));
     let joined = |entries: &[(u8, String)]| {
@@ -671,6 +673,26 @@ mod tests {
             status_line(Some(&legend_actions()), None, 45),
             "hint open · tab multi · esc quit · ? help"
         );
+    }
+
+    #[test]
+    fn in_multi_select_the_confirm_key_outlasts_the_legend() {
+        let screen = Screen::from_ansi("/tmp/x", 52);
+        let mut session = session_for(&screen);
+        session.press(Key::Tab);
+        let theme = Theme::default();
+        let actions = legend_actions();
+        let view = View {
+            screen: &screen,
+            session: &session,
+            theme: &theme,
+            geometry: None,
+            notice: None,
+            actions: &actions,
+            show_legend: true,
+        };
+        let line = row_text(&draw(&view, 52, 2), 1).trim_start().to_string();
+        assert_eq!(line, "multi (0 picked) · tab multi · esc quit · ? help");
     }
 
     #[test]

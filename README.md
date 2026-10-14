@@ -68,8 +68,9 @@ example `hint copy · ⇧ paste · ⌃ open · tab multi · esc quit · ? help`.
 `⇧`, `⌃` and `⌥` stand for Shift, Ctrl and Alt; a modifier bound to `""` is
 left out, and a command shows its program name. It sits outside the pane or
 after the text on the pane's last row, so it never covers a match. When the
-line is short of room, the Alt and Ctrl entries go first; a configuration
-notice, the typed keys, `esc quit` and `? help` stay longest. The help box
+line is short of room, the Alt, Ctrl and Shift entries go first, then
+`tab multi` (kept while multi-select is on) and the plain hint entry; a
+configuration notice, the typed keys, `esc quit` and `? help` stay longest. The help box
 (`?`) lists the same actions. Turn the legend off with `show_legend = false`.
 
 Typing the first key of a two-key hint hides every other hint. A URL or path
