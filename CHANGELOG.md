@@ -7,12 +7,22 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-14
+
 ### Added
+- `herdr plugin install ryanlewis/herdr-fingers` downloads a prebuilt
+  binary for macOS (Apple silicon and Intel) and Linux (x86_64 and aarch64)
+  and checks its SHA-256, so no Rust toolchain is needed. It builds with
+  cargo when there is no binary for the platform or the download fails.
 - The overlay's status line lists what each key does, built from the
   configured actions (`hint copy · ⇧ paste · ⌃ open …`). Turn it off with
   `show_legend = false`.
 
 ### Changed
+- The plugin id is now `io.rlew.fingers`, and the plugin installs from
+  `ryanlewis/herdr-fingers`. Update the keybinding to
+  `command = "io.rlew.fingers.start"`, and move an existing `config.toml`
+  to the directory `herdr plugin config-dir io.rlew.fingers` prints.
 - The log no longer holds the text you pick. It records the action and the
   length; `log_picked_text = true` brings the preview back.
 
