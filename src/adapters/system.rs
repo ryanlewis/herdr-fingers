@@ -28,13 +28,11 @@ impl Launcher for SystemLauncher {
         }
         let status = command
             .status()
-            .map_err(|error| PortError::new(format!("cannot run `{opener} {target}`: {error}")))?;
+            .map_err(|error| PortError::new(format!("cannot run `{opener}`: {error}")))?;
         if status.success() {
             Ok(())
         } else {
-            Err(PortError::new(format!(
-                "`{opener} {target}` exited with an error"
-            )))
+            Err(PortError::new(format!("`{opener}` exited with an error")))
         }
     }
 
