@@ -8,13 +8,13 @@ issue.
 ## Supported versions
 
 Only the latest release receives fixes. Reinstall with
-`herdr plugin install nathan-poncet/herdr-fingers` to get them.
+`herdr plugin install ryanlewis/herdr-fingers` to get them.
 
 ## Reporting a vulnerability
 
 Use GitHub's private vulnerability reporting:
 **Security → Report a vulnerability** on
-[github.com/nathan-poncet/herdr-fingers](https://github.com/nathan-poncet/herdr-fingers/security/advisories/new).
+[github.com/ryanlewis/herdr-fingers](https://github.com/ryanlewis/herdr-fingers/security/advisories/new).
 Nothing you write there is visible to anyone but the maintainer until a fix
 is out.
 

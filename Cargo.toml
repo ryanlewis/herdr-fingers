@@ -1,11 +1,11 @@
 [package]
 name = "herdr-fingers"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 description = "tmux-fingers for Herdr: type a short hint to copy, paste or open anything visible in a pane"
 license = "MIT"
-repository = "https://github.com/nathan-poncet/herdr-fingers"
+repository = "https://github.com/ryanlewis/herdr-fingers"
 readme = "README.md"
 keywords = ["herdr", "terminal", "tui", "clipboard", "tmux-fingers"]
 categories = ["command-line-utilities"]

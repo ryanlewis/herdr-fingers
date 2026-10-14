@@ -46,7 +46,7 @@ pub struct PluginContext {
     pub state_dir: Option<PathBuf>,
 }
 
-pub const DEFAULT_PLUGIN_ID: &str = "nathan-poncet.herdr-fingers";
+pub const DEFAULT_PLUGIN_ID: &str = "io.rlew.fingers";
 
 impl PluginContext {
     pub fn from_env() -> Self {
@@ -397,15 +397,12 @@ mod tests {
         let mut env = BTreeMap::new();
         env.insert("HERDR_FINGERS_GEOMETRY".to_string(), "{}".to_string());
         let pane = HerdrClient::new(&path)
-            .open_plugin_pane("nathan-poncet.herdr-fingers", "overlay", env)
+            .open_plugin_pane("io.rlew.fingers", "overlay", env)
             .unwrap();
         let requests = server.join().unwrap();
         assert_eq!(pane, "w1:p9");
         assert_eq!(requests[0]["method"], "plugin.pane.open");
-        assert_eq!(
-            requests[0]["params"]["plugin_id"],
-            "nathan-poncet.herdr-fingers"
-        );
+        assert_eq!(requests[0]["params"]["plugin_id"], "io.rlew.fingers");
         assert_eq!(requests[0]["params"]["entrypoint"], "overlay");
         assert_eq!(requests[0]["params"]["focus"], true);
         assert_eq!(requests[0]["params"]["env"]["HERDR_FINGERS_GEOMETRY"], "{}");

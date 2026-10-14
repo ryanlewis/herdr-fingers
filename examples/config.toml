@@ -1,7 +1,7 @@
 # herdr-fingers configuration.
 #
 # Lives at $HERDR_PLUGIN_CONFIG_DIR/config.toml; print that directory with
-#   herdr plugin config-dir nathan-poncet.herdr-fingers
+#   herdr plugin config-dir io.rlew.fingers
 # Every key is optional. The values below are the defaults.
 
 # Keys hints are built from, best keys first. One of:

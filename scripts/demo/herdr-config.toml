@@ -15,7 +15,7 @@ manifest_check = false
 [[keys.command]]
 key = "prefix+f"
 type = "plugin_action"
-command = "nathan-poncet.herdr-fingers.start"
+command = "io.rlew.fingers.start"
 description = "copy with hints"
 
 [ui.toast]

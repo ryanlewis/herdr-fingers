@@ -16,7 +16,7 @@ cat > README.md <<'MD'
 Tiny service used for the herdr-fingers demo.
 
 - Docs: https://docs.example.com/sample-app/getting-started
-- Issues: https://github.com/nathan-poncet/herdr-fingers/issues
+- Issues: https://github.com/ryanlewis/herdr-fingers/issues
 MD
 printf 'fn main() {\n    println!("listening on 10.0.12.34:8080");\n}\n' > src/main.rs
 printf 'pub fn routes() -> Vec<&'"'"'static str> {\n    vec!["/health", "/v1/orders"]\n}\n' > src/api/router.rs
