@@ -11,7 +11,7 @@ command = ["./install.sh"]
 [[actions]]
 id = "start"
 title = "Fingers: show hints"
-description = "Label every path, URL, hash, IP, UUID and number in the focused pane; type a label to copy it (Shift pastes, Ctrl opens)."
+description = "Label every path, URL, hash, IP, UUID and number in the focused pane; type a label to open it (Ctrl copies, Shift pastes)."
 contexts = ["pane", "workspace", "global"]
 command = ["./target/release/herdr-fingers", "start"]
 
@@ -22,3 +22,15 @@ id = "overlay"
 title = "Fingers"
 placement = "overlay"
 command = ["./target/release/herdr-fingers", "ui"]
+
+# The editor `:open:` runs on a picked file, as a split beside the source
+# pane. The overlay opens it with the source pane's directory as its cwd, so
+# the binary is found through $HERDR_PLUGIN_ROOT (Herdr does not expand
+# variables in this array, hence `sh -c`). The file name and editor arrive
+# in the environment and are passed to the editor as separate arguments;
+# they never reach a shell.
+[[panes]]
+id = "editor"
+title = "Fingers editor"
+placement = "split"
+command = ["sh", "-c", "exec \"$HERDR_PLUGIN_ROOT/target/release/herdr-fingers\" edit"]

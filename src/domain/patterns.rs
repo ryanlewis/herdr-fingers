@@ -4,12 +4,16 @@
 use regex::Regex;
 use thiserror::Error;
 
+use super::open::UrlTemplate;
+
 /// A named regular expression. A `match` capture group narrows the copied
 /// text to that group (the rest of the match is only context).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternSpec {
     pub name: String,
     pub regex: String,
+    /// Where `:open:` sends this pattern's matches.
+    pub open_url: Option<UrlTemplate>,
 }
 
 impl PatternSpec {
@@ -17,7 +21,13 @@ impl PatternSpec {
         PatternSpec {
             name: name.into(),
             regex: regex.into(),
+            open_url: None,
         }
+    }
+
+    pub fn opening(mut self, open_url: UrlTemplate) -> Self {
+        self.open_url = Some(open_url);
+        self
     }
 }
 
@@ -89,6 +99,7 @@ pub enum PatternError {
 struct Pattern {
     name: String,
     regex: Regex,
+    open_url: Option<UrlTemplate>,
 }
 
 /// A match found in a logical line, in byte offsets of that line's text.
@@ -130,6 +141,7 @@ impl PatternSet {
             patterns.push(Pattern {
                 name: spec.name.clone(),
                 regex,
+                open_url: spec.open_url.clone(),
             });
         }
         Ok(PatternSet { patterns })
@@ -141,6 +153,14 @@ impl PatternSet {
 
     pub fn names(&self) -> Vec<&str> {
         self.patterns.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    /// The URL template `:open:` uses for the named pattern's matches.
+    pub fn open_url(&self, name: &str) -> Option<&UrlTemplate> {
+        self.patterns
+            .iter()
+            .find(|p| p.name == name)
+            .and_then(|p| p.open_url.as_ref())
     }
 
     /// Non-overlapping matches in `text`, leftmost first; at equal starts the
@@ -333,6 +353,19 @@ mod tests {
             .map(|m| &text[m.capture_start..m.capture_end])
             .collect();
         assert_eq!(found, vec!["42", "https://j.ira/PROJ-42"]);
+    }
+
+    #[test]
+    fn a_pattern_keeps_its_open_url() {
+        let template = UrlTemplate::parse("https://t.io/{}").unwrap();
+        let set = PatternSet::compile(&[
+            PatternSpec::new("ticket", "T-[0-9]+").opening(template.clone()),
+            PatternSpec::new("plain", "x"),
+        ])
+        .unwrap();
+        assert_eq!(set.open_url("ticket"), Some(&template));
+        assert_eq!(set.open_url("plain"), None);
+        assert_eq!(set.open_url("missing"), None);
     }
 
     #[test]

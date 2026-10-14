@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use crate::domain::geometry::{Layout, OverlayGeometry};
+use crate::domain::open::Surroundings;
 use crate::domain::screen::Screen;
 use crate::domain::session::{Outcome, Session};
-use crate::domain::settings::{Actions, Theme};
+use crate::domain::settings::{Actions, SplitDirection, Theme};
 
 /// An adapter failed; the message is already fit for a human.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -38,10 +39,28 @@ pub trait PaneHost {
         entrypoint: &str,
         env: BTreeMap<String, String>,
     ) -> Result<String, PortError>;
+    /// Opens one of this plugin's declared panes as a split; returns its id.
+    fn open_split(&self, split: &SplitPane<'_>) -> Result<String, PortError>;
     /// Types `text` into the pane as if the user had.
     fn send_text(&self, pane_id: &str, text: &str) -> Result<(), PortError>;
     /// Shows a toast.
     fn notify(&self, title: &str, body: &str) -> Result<(), PortError>;
+}
+
+/// A plugin pane opened beside another pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SplitPane<'a> {
+    pub plugin_id: &'a str,
+    pub entrypoint: &'a str,
+    pub beside: &'a str,
+    pub direction: SplitDirection,
+    pub cwd: Option<&'a Path>,
+    pub env: BTreeMap<String, String>,
+}
+
+/// What `:open:` needs to know about files and repositories.
+pub trait FileSystem: Surroundings {
+    fn home_dir(&self) -> Option<PathBuf>;
 }
 
 /// Where `:copy:` puts the text.
@@ -53,6 +72,8 @@ pub trait Clipboard {
 pub trait Launcher {
     /// Opens a URL or file with whatever the system uses for it.
     fn open(&self, target: &str, cwd: Option<&Path>) -> Result<(), PortError>;
+    /// Shows an absolute path in its folder without opening it.
+    fn reveal(&self, path: &Path) -> Result<(), PortError>;
     /// Runs a command line with `stdin` on its standard input and `env` added
     /// to its environment; a non-zero exit is an error.
     fn run(

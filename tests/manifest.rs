@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use herdr_fingers::adapters::herdr::DEFAULT_PLUGIN_ID;
+use herdr_fingers::usecases::pick::EDITOR_ENTRYPOINT;
 use herdr_fingers::usecases::start::OVERLAY_TITLE;
 
 fn manifest() -> toml::Value {
@@ -54,5 +55,25 @@ fn the_start_action_runs_the_release_binary() {
         manifest["build"][0]["command"][0].as_str(),
         Some("./install.sh"),
         "install.sh puts the binary at ./target/release, downloaded or built"
+    );
+}
+
+#[test]
+fn the_editor_pane_is_a_split_running_the_edit_subcommand() {
+    let manifest = manifest();
+    let panes = manifest["panes"].as_array().expect("panes");
+    let editor = panes
+        .iter()
+        .find(|pane| pane["id"].as_str() == Some(EDITOR_ENTRYPOINT))
+        .expect("an editor pane");
+    assert_eq!(editor["placement"].as_str(), Some("split"));
+    let command = editor["command"].as_array().expect("a command");
+    let script = command
+        .last()
+        .and_then(|word| word.as_str())
+        .expect("a script");
+    assert!(
+        script.ends_with("/target/release/herdr-fingers\" edit"),
+        "the editor pane must run the `edit` subcommand: {script}"
     );
 }

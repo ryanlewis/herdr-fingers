@@ -10,6 +10,8 @@ use super::screen::Segment;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub text: String,
+    /// The name of the pattern that found the text.
+    pub pattern: String,
     pub hint: String,
     pub segments: Vec<Segment>,
 }
@@ -46,12 +48,25 @@ pub enum Key {
     Help,
 }
 
+/// One picked text and the pattern that found it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pick {
+    pub text: String,
+    pub pattern: String,
+}
+
 /// What the user picked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Selection {
-    pub texts: Vec<String>,
+    pub picks: Vec<Pick>,
     pub hint: String,
     pub modifier: Modifier,
+}
+
+impl Selection {
+    pub fn texts(&self) -> Vec<&str> {
+        self.picks.iter().map(|pick| pick.text.as_str()).collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +120,7 @@ impl Session {
             };
             targets.push(Target {
                 text: candidate.text.clone(),
+                pattern: candidate.pattern.clone(),
                 hint,
                 segments: candidate.segments.clone(),
             });
@@ -195,7 +211,10 @@ impl Session {
             return Outcome::Continue;
         };
         let hint = target.hint.clone();
-        let text = target.text.clone();
+        let pick = Pick {
+            text: target.text.clone(),
+            pattern: target.pattern.clone(),
+        };
         self.input.clear();
         if self.multi {
             self.last_modifier = modifier;
@@ -207,21 +226,24 @@ impl Session {
             return Outcome::Continue;
         }
         Outcome::Picked(Selection {
-            texts: vec![text],
+            picks: vec![pick],
             hint,
             modifier,
         })
     }
 
     fn pick_selected(&mut self) -> Outcome {
-        let texts = self
+        let picks = self
             .selected
             .iter()
             .filter_map(|hint| self.targets.iter().find(|t| t.hint == *hint))
-            .map(|t| t.text.clone())
+            .map(|t| Pick {
+                text: t.text.clone(),
+                pattern: t.pattern.clone(),
+            })
             .collect();
         Outcome::Picked(Selection {
-            texts,
+            picks,
             hint: self.selected.join(","),
             modifier: self.last_modifier,
         })
@@ -255,6 +277,16 @@ mod tests {
             .map(|(row, text)| candidate(text, row, 0))
             .collect();
         Session::new(candidates, &alphabet())
+    }
+
+    fn picks(texts: &[&str]) -> Vec<Pick> {
+        texts
+            .iter()
+            .map(|text| Pick {
+                text: text.to_string(),
+                pattern: "test".into(),
+            })
+            .collect()
     }
 
     fn hints(session: &Session) -> Vec<(&str, &str)> {
@@ -303,9 +335,27 @@ mod tests {
         assert_eq!(
             session.press(Key::Hint('s', Modifier::Shift)),
             Outcome::Picked(Selection {
-                texts: vec!["/top".into()],
+                picks: picks(&["/top"]),
                 hint: "s".into(),
                 modifier: Modifier::Shift,
+            })
+        );
+    }
+
+    #[test]
+    fn a_pick_carries_the_pattern_that_found_its_text() {
+        let mut url = candidate("https://x.io", 0, 0);
+        url.pattern = "url".into();
+        let mut session = Session::new(vec![url], &alphabet());
+        assert_eq!(
+            session.press(Key::Hint('a', Modifier::Main)),
+            Outcome::Picked(Selection {
+                picks: vec![Pick {
+                    text: "https://x.io".into(),
+                    pattern: "url".into(),
+                }],
+                hint: "a".into(),
+                modifier: Modifier::Main,
             })
         );
     }
@@ -336,7 +386,7 @@ mod tests {
         assert_eq!(
             session.press(Key::Hint('a', Modifier::Main)),
             Outcome::Picked(Selection {
-                texts: vec!["/2222".into()],
+                picks: picks(&["/2222"]),
                 hint: "fa".into(),
                 modifier: Modifier::Main
             })
@@ -366,7 +416,7 @@ mod tests {
         assert_eq!(
             session.press(Key::Tab),
             Outcome::Picked(Selection {
-                texts: vec!["/bottom".into(), "/top".into()],
+                picks: picks(&["/bottom", "/top"]),
                 hint: "a,d".into(),
                 modifier: Modifier::Main,
             })
@@ -385,7 +435,7 @@ mod tests {
         assert_eq!(
             session.press(Key::Enter),
             Outcome::Picked(Selection {
-                texts: vec!["/top".into()],
+                picks: picks(&["/top"]),
                 hint: "s".into(),
                 modifier: Modifier::Shift,
             })

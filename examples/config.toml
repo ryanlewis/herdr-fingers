@@ -21,16 +21,27 @@ keyboard_layout = "qwerty"
 hint_position = "left"
 
 # What happens to the picked text, per key held while typing the hint.
+#   ":open:"  open it: web links in the browser, folders with the system
+#             opener, files in `editor`, Git SHAs on GitHub, and a pattern's
+#             `open_url`; programs are only shown in their folder
 #   ":copy:"  copy it (see `clipboard` below)
 #   ":paste:" type it into the pane the hints came from
-#   ":open:"  open URLs and files with the system opener
 #   ""        nothing
 # Anything else is a command line, run with the text on its stdin and
 # MODIFIER / HINT in its environment, from the pane's working directory.
-main_action = ":copy:"
-ctrl_action = ":open:"
+main_action = ":open:"
+ctrl_action = ":copy:"
 shift_action = ":paste:"
 alt_action = ""
+
+# The editor ":open:" runs on files, in a new pane beside the one the hints
+# came from. {path} is replaced by the file and {line} by the line number;
+# a word holding {line} is left out when there is none. Without placeholders
+# the editor gets `+{line} {path}`. Defaults to $VISUAL, then $EDITOR; with
+# neither, files are shown in their folder instead.
+# editor = "nvim +{line} {path}"
+# Where the editor pane opens: "right" or "down".
+editor_split = "right"
 
 # Built-in patterns to look for; omit to enable them all. Known names:
 #   ip, uuid, sha, digit, url, path, hex, kubernetes, kubernetes-pod,
@@ -43,6 +54,14 @@ alt_action = ""
 # [[patterns]]
 # name = "ticket"
 # regex = "PROJ-[0-9]+"
+#
+# A pattern may say where ":open:" sends its matches: {} in `open_url` is
+# replaced by the match (the `match` group when there is one), URL-encoded.
+# Open ticket keys such as RET-1234 in your tracker.
+# [[patterns]]
+# name = "jira"
+# regex = "\\b(?P<match>[A-Z][A-Z0-9]+-[0-9]+)\\b"
+# open_url = "https://example.atlassian.net/browse/{}"
 
 # How ":copy:" reaches the clipboard.
 #   "osc52"  through Herdr to the terminal you are looking at (works over SSH)

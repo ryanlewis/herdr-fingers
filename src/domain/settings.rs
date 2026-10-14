@@ -2,6 +2,7 @@
 //! raw config file.
 
 use super::alphabet::Alphabet;
+use super::open::EditorCommand;
 use super::patterns::PatternSet;
 use super::session::Modifier;
 use super::style::{Color, TextStyle};
@@ -66,8 +67,8 @@ impl Actions {
 impl Default for Actions {
     fn default() -> Self {
         Actions {
-            main: Action::Copy,
-            ctrl: Action::Open,
+            main: Action::Open,
+            ctrl: Action::Copy,
             shift: Action::Paste,
             alt: Action::Nothing,
         }
@@ -82,6 +83,23 @@ pub enum ClipboardMode {
     Osc52,
     System,
     Both,
+}
+
+/// Which side of the source pane the editor opens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SplitDirection {
+    #[default]
+    Right,
+    Down,
+}
+
+impl SplitDirection {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SplitDirection::Right => "right",
+            SplitDirection::Down => "down",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -135,6 +153,9 @@ pub struct Settings {
     pub log_picked_text: bool,
     pub show_legend: bool,
     pub multi_separator: String,
+    /// The editor `:open:` runs on files; `None` reveals them instead.
+    pub editor: Option<EditorCommand>,
+    pub editor_split: SplitDirection,
 }
 
 impl Default for Settings {
@@ -150,6 +171,8 @@ impl Default for Settings {
             log_picked_text: false,
             show_legend: true,
             multi_separator: " ".to_string(),
+            editor: None,
+            editor_split: SplitDirection::default(),
         }
     }
 }
@@ -179,10 +202,10 @@ mod tests {
     }
 
     #[test]
-    fn default_actions_mirror_tmux_fingers() {
+    fn a_plain_hint_opens_and_ctrl_copies_by_default() {
         let actions = Actions::default();
-        assert_eq!(actions.for_modifier(Modifier::Main), &Action::Copy);
-        assert_eq!(actions.for_modifier(Modifier::Ctrl), &Action::Open);
+        assert_eq!(actions.for_modifier(Modifier::Main), &Action::Open);
+        assert_eq!(actions.for_modifier(Modifier::Ctrl), &Action::Copy);
         assert_eq!(actions.for_modifier(Modifier::Shift), &Action::Paste);
         assert_eq!(actions.for_modifier(Modifier::Alt), &Action::Nothing);
     }

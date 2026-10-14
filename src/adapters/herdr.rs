@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::domain::geometry::{Layout, PanePlacement, Rect};
-use crate::usecases::ports::{PaneHost, PortError};
+use crate::usecases::ports::{PaneHost, PortError, SplitPane};
 
 #[derive(Debug, Error)]
 pub enum HerdrError {
@@ -213,14 +213,26 @@ impl HerdrClient {
                 "env": env
             }),
         )?;
-        result
-            .pointer("/plugin_pane/pane/pane_id")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| HerdrError::Protocol {
-                method: "plugin.pane.open".to_string(),
-                detail: "no pane id in the response".to_string(),
-            })
+        new_plugin_pane_id(&result)
+    }
+
+    /// Opens one of this plugin's declared panes as a focused split beside
+    /// another pane; returns the new pane id.
+    pub fn open_plugin_split(&self, split: &SplitPane<'_>) -> Result<String, HerdrError> {
+        let result = self.call(
+            "plugin.pane.open",
+            json!({
+                "plugin_id": split.plugin_id,
+                "entrypoint": split.entrypoint,
+                "placement": "split",
+                "direction": split.direction.as_str(),
+                "target_pane_id": split.beside,
+                "cwd": split.cwd,
+                "focus": true,
+                "env": split.env
+            }),
+        )?;
+        new_plugin_pane_id(&result)
     }
 
     pub fn send_text(&self, pane_id: &str, text: &str) -> Result<(), HerdrError> {
@@ -238,6 +250,17 @@ impl HerdrClient {
         )?;
         Ok(())
     }
+}
+
+fn new_plugin_pane_id(result: &Value) -> Result<String, HerdrError> {
+    result
+        .pointer("/plugin_pane/pane/pane_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| HerdrError::Protocol {
+            method: "plugin.pane.open".to_string(),
+            detail: "no pane id in the response".to_string(),
+        })
 }
 
 impl From<HerdrError> for PortError {
@@ -270,6 +293,10 @@ impl PaneHost for HerdrClient {
         env: BTreeMap<String, String>,
     ) -> Result<String, PortError> {
         Ok(self.open_plugin_pane(plugin_id, entrypoint, env)?)
+    }
+
+    fn open_split(&self, split: &SplitPane<'_>) -> Result<String, PortError> {
+        Ok(self.open_plugin_split(split)?)
     }
 
     fn send_text(&self, pane_id: &str, text: &str) -> Result<(), PortError> {
@@ -315,6 +342,7 @@ pub fn parse_layout(value: &Value) -> Option<Layout> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::settings::SplitDirection;
     use std::os::unix::net::UnixListener;
 
     /// A one-shot fake Herdr: answers `responses` in order, records requests.
@@ -409,6 +437,41 @@ mod tests {
         assert_eq!(requests[0]["params"]["entrypoint"], "overlay");
         assert_eq!(requests[0]["params"]["focus"], true);
         assert_eq!(requests[0]["params"]["env"]["HERDR_FINGERS_GEOMETRY"], "{}");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn the_editor_opens_as_a_split_beside_the_source_pane() {
+        let (path, server) = fake_herdr(vec![json!({
+            "type": "plugin_pane_opened",
+            "plugin_pane": {"plugin_id": "x", "entrypoint": "editor", "pane": {"pane_id": "w1:p8"}}
+        })]);
+        let mut env = BTreeMap::new();
+        env.insert(
+            "HERDR_FINGERS_EDIT_PATH".to_string(),
+            "/w/a b.rs".to_string(),
+        );
+        let pane = HerdrClient::new(&path)
+            .open_plugin_split(&SplitPane {
+                plugin_id: "x",
+                entrypoint: "editor",
+                beside: "w1:p1",
+                direction: SplitDirection::Down,
+                cwd: Some(Path::new("/w")),
+                env,
+            })
+            .unwrap();
+        let requests = server.join().unwrap();
+        assert_eq!(pane, "w1:p8");
+        let params = &requests[0]["params"];
+        assert_eq!(requests[0]["method"], "plugin.pane.open");
+        assert_eq!(params["entrypoint"], "editor");
+        assert_eq!(params["placement"], "split");
+        assert_eq!(params["direction"], "down");
+        assert_eq!(params["target_pane_id"], "w1:p1");
+        assert_eq!(params["cwd"], "/w");
+        assert_eq!(params["focus"], true);
+        assert_eq!(params["env"]["HERDR_FINGERS_EDIT_PATH"], "/w/a b.rs");
         let _ = std::fs::remove_file(path);
     }
 

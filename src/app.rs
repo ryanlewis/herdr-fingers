@@ -9,7 +9,7 @@ use crate::adapters::clipboard::SystemClipboard;
 use crate::adapters::config::{self, ConfigError};
 use crate::adapters::herdr::{HerdrClient, HerdrError, PluginContext};
 use crate::adapters::log;
-use crate::adapters::system::SystemLauncher;
+use crate::adapters::system::{self, SystemFiles, SystemLauncher};
 use crate::adapters::tui::{self, TerminalPicker};
 use crate::domain::geometry::{GeometryError, OverlayGeometry};
 use crate::domain::matcher::find_candidates;
@@ -17,7 +17,9 @@ use crate::domain::patterns::{self, PatternError, PatternSet};
 use crate::domain::screen::Screen;
 use crate::domain::session::Session;
 use crate::domain::settings::Settings;
-use crate::usecases::pick::{self, Deps, PickError, PickRequest, Picked};
+use crate::usecases::pick::{
+    self, Deps, EDIT_LINE_ENV, EDIT_PATH_ENV, EDITOR_ENV, PickError, PickRequest, Picked,
+};
 use crate::usecases::start::{self, GEOMETRY_ENV, PATTERNS_ENV, StartError};
 
 #[derive(Debug, Error)]
@@ -40,6 +42,10 @@ pub enum AppError {
     NoFocusedPane,
     #[error("unknown option `{0}`")]
     UnknownOption(String),
+    #[error("{0} is not set: the editor pane is opened by the overlay")]
+    MissingEnv(&'static str),
+    #[error("cannot start the editor: {0}")]
+    Editor(std::io::Error),
 }
 
 /// `start`: the plugin action.
@@ -89,6 +95,9 @@ fn run_overlay(context: &PluginContext) -> Result<(), AppError> {
             )
         }
     };
+    if settings.editor.is_none() {
+        settings.editor = config::editor_from_env();
+    }
     if let Ok(names) = std::env::var(PATTERNS_ENV) {
         let names: Vec<&str> = names.split(',').map(str::trim).collect();
         settings.patterns = PatternSet::compile(&patterns::builtin_specs(&names)?)?;
@@ -98,6 +107,7 @@ fn run_overlay(context: &PluginContext) -> Result<(), AppError> {
         SystemClipboard::new(settings.clipboard, settings.clipboard_command.clone());
     let mut picker = TerminalPicker;
     let request = PickRequest {
+        plugin_id: &context.plugin_id,
         pane_id: &pane_id,
         geometry: geometry.as_ref(),
         settings: &settings,
@@ -107,12 +117,37 @@ fn run_overlay(context: &PluginContext) -> Result<(), AppError> {
         host: &client,
         clipboard: &mut clipboard,
         launcher: &SystemLauncher,
+        files: &SystemFiles,
         picker: &mut picker,
     };
     if let Picked::Done(message) = pick::pick(&request, &mut deps)? {
         log::append(context.state_dir.as_deref(), &message);
     }
     Ok(())
+}
+
+/// `edit`: runs in the editor pane `:open:` opens, and becomes the editor.
+/// The file arrives in the environment and is passed as one argument, so
+/// nothing in its name is interpreted.
+pub fn edit() -> Result<(), AppError> {
+    let context = PluginContext::from_env();
+    let error = match edit_argv() {
+        Ok(argv) => AppError::Editor(system::exec(&argv, None)),
+        Err(error) => error,
+    };
+    log::append(context.state_dir.as_deref(), &format!("error: {error}"));
+    tui::show_error_and_wait(&error.to_string())?;
+    Err(error)
+}
+
+fn edit_argv() -> Result<Vec<String>, AppError> {
+    let required = |name: &'static str| std::env::var(name).map_err(|_| AppError::MissingEnv(name));
+    let editor = config::editor_command(&required(EDITOR_ENV)?)?;
+    let path = required(EDIT_PATH_ENV)?;
+    let line = std::env::var(EDIT_LINE_ENV)
+        .ok()
+        .and_then(|line| line.parse().ok());
+    Ok(editor.argv(&path, line))
 }
 
 /// `scan`: reads a screen dump on stdin and prints what would get a hint.

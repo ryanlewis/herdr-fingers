@@ -1,39 +1,83 @@
 //! Opening things and running the user's commands, with real processes.
 
 use std::io::Write;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use crate::usecases::ports::{Launcher, PortError};
+use crate::domain::open::{PathKind, Surroundings};
+use crate::usecases::ports::{FileSystem, Launcher, PortError};
 
 /// `open` / `xdg-open` and shell command lines.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SystemLauncher;
 
+/// The system opener's argv for `target`. The target is always one argument
+/// of its own and never read as an option: macOS `open` takes `--`, and
+/// `xdg-open`, which does not, gets no target starting with `-`.
+fn open_argv(target: &str) -> Result<Vec<String>, PortError> {
+    if cfg!(target_os = "macos") {
+        Ok(vec!["open".into(), "--".into(), target.into()])
+    } else if target.starts_with('-') {
+        Err(PortError::new(
+            "refusing to open a target that starts with -",
+        ))
+    } else {
+        Ok(vec!["xdg-open".into(), target.into()])
+    }
+}
+
+/// Shows `path` in its folder: Finder selects it on macOS; elsewhere the
+/// folder is opened.
+fn reveal_argv(path: &Path) -> Result<Vec<String>, PortError> {
+    if !path.is_absolute() {
+        return Err(PortError::new("refusing to reveal a relative path"));
+    }
+    if cfg!(target_os = "macos") {
+        Ok(vec![
+            "open".into(),
+            "-R".into(),
+            "--".into(),
+            path.to_string_lossy().into_owned(),
+        ])
+    } else {
+        let folder = path.parent().unwrap_or(path);
+        Ok(vec![
+            "xdg-open".into(),
+            folder.to_string_lossy().into_owned(),
+        ])
+    }
+}
+
+fn run_opener(argv: &[String], cwd: Option<&Path>) -> Result<(), PortError> {
+    let (program, args) = argv.split_first().expect("an opener argv has a program");
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let status = command
+        .status()
+        .map_err(|error| PortError::new(format!("cannot run `{program}`: {error}")))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(PortError::new(format!("`{program}` exited with an error")))
+    }
+}
+
 impl Launcher for SystemLauncher {
     fn open(&self, target: &str, cwd: Option<&Path>) -> Result<(), PortError> {
-        let opener = if cfg!(target_os = "macos") {
-            "open"
-        } else {
-            "xdg-open"
-        };
-        let mut command = Command::new(opener);
-        command
-            .arg(target)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if let Some(dir) = cwd {
-            command.current_dir(dir);
-        }
-        let status = command
-            .status()
-            .map_err(|error| PortError::new(format!("cannot run `{opener}`: {error}")))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(PortError::new(format!("`{opener}` exited with an error")))
-        }
+        run_opener(&open_argv(target)?, cwd)
+    }
+
+    fn reveal(&self, path: &Path) -> Result<(), PortError> {
+        run_opener(&reveal_argv(path)?, None)
     }
 
     fn run(
@@ -79,11 +123,63 @@ impl Launcher for SystemLauncher {
     }
 }
 
+/// Replaces this process with `argv`; returns only if that failed.
+pub fn exec(argv: &[String], cwd: Option<&Path>) -> std::io::Error {
+    let Some((program, args)) = argv.split_first() else {
+        return std::io::Error::other("empty command");
+    };
+    let mut command = Command::new(program);
+    command.args(args);
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    command.exec()
+}
+
+/// The real file system, and `git` for the remote of a repository.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SystemFiles;
+
+impl Surroundings for SystemFiles {
+    fn kind(&self, path: &Path) -> PathKind {
+        match std::fs::metadata(path) {
+            Err(_) => PathKind::Missing,
+            Ok(meta) if meta.is_dir() => PathKind::Directory,
+            Ok(meta) if meta.permissions().mode() & 0o111 != 0 => PathKind::Executable,
+            Ok(_) => PathKind::File,
+        }
+    }
+
+    fn git_origin(&self, dir: &Path) -> Option<String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["remote", "get-url", "origin"])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let url = String::from_utf8(output.stdout).ok()?;
+        Some(url.trim().to_string()).filter(|url| !url.is_empty())
+    }
+}
+
+impl FileSystem for SystemFiles {
+    fn home_dir(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn temp_file(name: &str) -> std::path::PathBuf {
+    fn temp_file(name: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -123,6 +219,76 @@ mod tests {
             dir.to_str().unwrap()
         );
         let _ = std::fs::remove_file(target);
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = temp_file(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn the_opener_gets_the_target_as_one_argument_never_as_an_option() {
+        let tricky = "/tmp/a b'c\"$(touch x)";
+        let argv = open_argv(tricky).unwrap();
+        assert_eq!(argv.last().map(String::as_str), Some(tricky));
+        if cfg!(target_os = "macos") {
+            assert_eq!(argv, vec!["open", "--", tricky]);
+            assert_eq!(open_argv("-rf").unwrap(), vec!["open", "--", "-rf"]);
+        } else {
+            assert_eq!(argv, vec!["xdg-open", tricky]);
+            assert!(open_argv("-rf").is_err());
+        }
+    }
+
+    #[test]
+    fn revealing_shows_the_file_in_its_folder() {
+        let argv = reveal_argv(Path::new("/w/run me")).unwrap();
+        if cfg!(target_os = "macos") {
+            assert_eq!(argv, vec!["open", "-R", "--", "/w/run me"]);
+        } else {
+            assert_eq!(argv, vec!["xdg-open", "/w"]);
+        }
+        assert!(reveal_argv(Path::new("-rf")).is_err());
+    }
+
+    #[test]
+    fn files_are_told_apart_by_kind() {
+        let dir = temp_dir("kinds");
+        let plain = dir.join("notes.md");
+        let script = dir.join("run");
+        std::fs::write(&plain, "x").unwrap();
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(SystemFiles.kind(&dir), PathKind::Directory);
+        assert_eq!(SystemFiles.kind(&plain), PathKind::File);
+        assert_eq!(SystemFiles.kind(&script), PathKind::Executable);
+        assert_eq!(SystemFiles.kind(&dir.join("gone")), PathKind::Missing);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_origin_remote_is_read_from_any_folder_of_the_repository() {
+        let dir = temp_dir("repo");
+        let git = |args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q"]).success());
+        assert_eq!(SystemFiles.git_origin(&dir), None);
+        assert!(git(&["remote", "add", "origin", "git@github.com:o/r.git"]).success());
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        assert_eq!(
+            SystemFiles.git_origin(&dir.join("src")),
+            Some("git@github.com:o/r.git".to_string())
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

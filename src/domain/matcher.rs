@@ -39,12 +39,30 @@ pub fn find_candidates(screen: &Screen, patterns: &PatternSet) -> Vec<Candidate>
         }
     }
     candidates.sort_by_key(|c| (c.first_row(), c.first_col()));
+    give_identical_texts_one_pattern(&mut candidates, &patterns.names());
     candidates
+}
+
+/// Identical texts share one hint, so they must also share one pattern:
+/// the one with the highest precedence (custom patterns come first).
+fn give_identical_texts_one_pattern(candidates: &mut [Candidate], precedence: &[&str]) {
+    let rank = |name: &str| precedence.iter().position(|p| *p == name);
+    for index in 0..candidates.len() {
+        let best = candidates
+            .iter()
+            .filter(|other| other.text == candidates[index].text)
+            .min_by_key(|other| rank(&other.pattern))
+            .map(|other| other.pattern.clone());
+        if let Some(best) = best {
+            candidates[index].pattern = best;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::patterns::{PatternSpec, builtin_specs};
 
     #[test]
     fn candidates_come_out_in_reading_order_with_their_positions() {
@@ -75,6 +93,22 @@ mod tests {
                 width: 7
             }
         );
+    }
+
+    #[test]
+    fn identical_texts_take_the_pattern_with_the_highest_precedence() {
+        let mut specs = vec![PatternSpec::new("ticket", r"\bab12cd34\b")];
+        specs.extend(builtin_specs(&["sha"]).unwrap());
+        let set = PatternSet::compile(&specs).unwrap();
+        // The sha pattern wins on the first line (no word boundary there);
+        // the second line matches the custom pattern.
+        let screen = Screen::from_ansi("xab12cd34\nab12cd34", 40);
+        let found = find_candidates(&screen, &set);
+        let texts: Vec<(&str, &str)> = found
+            .iter()
+            .map(|c| (c.text.as_str(), c.pattern.as_str()))
+            .collect();
+        assert_eq!(texts, vec![("ab12cd34", "ticket"), ("ab12cd34", "ticket")]);
     }
 
     #[test]
