@@ -5,6 +5,7 @@ pub mod alphabet;
 pub mod ansi;
 pub mod geometry;
 pub mod hints;
+pub mod links;
 pub mod matcher;
 pub mod open;
 pub mod patterns;

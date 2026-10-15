@@ -8,6 +8,7 @@ herdr-fingers — tmux-fingers for Herdr
 
 Usage:
   herdr-fingers start [--patterns a,b]   plugin action: open the hints overlay
+  herdr-fingers start --links            plugin action: hint the links on screen
   herdr-fingers ui                       the overlay itself (run by Herdr)
   herdr-fingers edit                     the editor pane opened by :open: (run by Herdr)
   herdr-fingers scan [--width N] < dump  list the hints a screen dump would get

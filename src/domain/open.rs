@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use thiserror::Error;
 
+use super::links::{self, LINK_PATTERN};
 use super::patterns::BUILTIN_PATTERNS;
 
 /// A URL with `{}` where the picked text goes, such as
@@ -303,6 +304,18 @@ pub fn resolve<S: Surroundings + ?Sized>(
     let text = request.text;
     if let Some(template) = request.url_template {
         return OpenTarget::Url(template.expand(text));
+    }
+    // A link the host reported names a file it was drawn for; a `file://`
+    // URL merely printed on screen is still refused below.
+    if request.pattern == LINK_PATTERN
+        && let Some(path) = links::file_url_path(text)
+    {
+        let as_path = OpenRequest {
+            text: &path,
+            pattern: "path",
+            ..*request
+        };
+        return resolve(&as_path, surroundings);
     }
     if let Some(scheme) = link_scheme(text) {
         return if scheme == "http" || scheme == "https" {
@@ -945,6 +958,29 @@ mod tests {
             UrlTemplate::parse("https://x/browse"),
             Err(UrlTemplateError::NoPlaceholder(_))
         ));
+    }
+
+    #[test]
+    fn a_file_link_from_link_mode_opens_as_the_path_it_names() {
+        let machine = Machine::default()
+            .with("/work/My Notes/a.md", PathKind::File)
+            .with("/Applications/Calc.app", PathKind::Directory);
+        assert_eq!(
+            open("file:///work/My%20Notes/a.md", LINK_PATTERN, &machine),
+            edit("/work/My Notes/a.md", None)
+        );
+        assert_eq!(
+            open("file:///Applications/Calc.app", LINK_PATTERN, &machine),
+            OpenTarget::Reveal("/Applications/Calc.app".into())
+        );
+        assert_eq!(
+            open("file://server/share/a.md", LINK_PATTERN, &machine),
+            OpenTarget::Refused(Refusal::Scheme("file".into()))
+        );
+        assert_eq!(
+            open("ssh://host/x", LINK_PATTERN, &machine),
+            OpenTarget::Refused(Refusal::Scheme("ssh".into()))
+        );
     }
 
     #[test]

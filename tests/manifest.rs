@@ -77,3 +77,23 @@ fn the_editor_pane_is_a_split_running_the_edit_subcommand() {
         "the editor pane must run the `edit` subcommand: {script}"
     );
 }
+
+#[test]
+fn the_links_action_starts_the_overlay_in_link_mode() {
+    let manifest = manifest();
+    let actions = manifest["actions"].as_array().expect("actions");
+    let links = actions
+        .iter()
+        .find(|action| action["id"].as_str() == Some("links"))
+        .expect("a links action");
+    let command: Vec<&str> = links["command"]
+        .as_array()
+        .expect("command")
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .collect();
+    assert_eq!(
+        command,
+        vec!["./target/release/herdr-fingers", "start", "--links"]
+    );
+}

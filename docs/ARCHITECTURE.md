@@ -16,7 +16,7 @@ Source dependencies point inward only. `tests/dependency_rule.rs` greps
 
 | Ring | Folder | Contents | May use |
 |---|---|---|---|
-| Kernel | `src/domain/` | `ansi`, `screen`, `patterns`, `matcher`, `hints`, `alphabet`, `session`, `geometry`, `settings`, `style` | `regex`, `unicode-width`, `thiserror` |
+| Kernel | `src/domain/` | `ansi`, `screen`, `patterns`, `matcher`, `links`, `hints`, `alphabet`, `session`, `geometry`, `settings`, `style` | `regex`, `unicode-width`, `thiserror` |
 | Use cases | `src/usecases/` | `ports` (the traits), `start`, `pick`, `testing` (fakes) | the kernel |
 | Adapters | `src/adapters/` | `herdr` implements `PaneHost`, `tui` implements `Picker`, `clipboard` implements `Clipboard`, `system` implements `Launcher`; `config` and `log` | the ports, the world |
 | Composition root | `src/app.rs`, `src/main.rs` | one function per subcommand: `start`, `ui`, `edit`, `scan` | anything |
@@ -29,7 +29,7 @@ cases need. Each has a real adapter and an in-memory fake in
 
 | Port | Real adapter | Fake | Methods |
 |---|---|---|---|
-| `PaneHost` | `HerdrClient` (socket API) | `FakeHost` | `layout`, `read_visible`, `pane_label`, `pane_cwd`, `open_overlay`, `open_split`, `send_text`, `notify` |
+| `PaneHost` | `HerdrClient` (socket API) | `FakeHost` | `layout`, `read_visible`, `link_at`, `pane_label`, `pane_cwd`, `open_overlay`, `open_split`, `send_text`, `notify` |
 | `Picker` | `TerminalPicker` (ratatui event loop) | `ScriptedPicker` (feeds keys to the real `Session`) | `pick(view, session) -> Outcome` |
 | `Clipboard` | `SystemClipboard` (OSC 52 and/or a command) | `RecordingClipboard` | `copy(text)` |
 | `Launcher` | `SystemLauncher` (`open`/`xdg-open`, shell command lines) | `RecordingLauncher` | `open(target, cwd)`, `reveal(path)`, `run(command_line, stdin, env, cwd)` |
@@ -53,6 +53,7 @@ prefix+f
         4. app: config::load  $HERDR_PLUGIN_CONFIG_DIR/config.toml → Settings (+ notice on error)
         5. host.read_visible  visible screen of the source pane, ANSI kept
         6. Screen::from_ansi → logical lines → PatternSet::find → Candidates
+           (link mode: links::styled_runs → host.link_at per run → Candidates)
         7. Session::new       hints assigned (bottom first, identical texts shared)
         8. picker.pick        draw · read key · Session::press … until Picked/Cancelled
         9. dispatch           Copy → clipboard · Paste → host.send_text · Open → open::resolve, then launcher.open / launcher.reveal / host.open_split (editor) · Shell → launcher.run
@@ -83,6 +84,9 @@ keeps running meanwhile). It is encoded by hand
   so `.+` never copies padding.
 - **`matcher`** — runs the patterns over the logical lines and returns
   `Candidate { text, pattern, segments }` in reading order.
+- **`links`** — link mode: `styled_runs`, the runs of coloured or underlined
+  text a labelled link may sit under, and `file_url_path`, the local path a
+  `file://` link names.
 - **`open`** — `resolve`: what `:open:` does with a picked text (a URL, a
   folder, a file to edit at a line, something to reveal, or a refusal), from
   the text, its pattern, the pattern's `open_url` and facts asked of a
@@ -107,12 +111,13 @@ keeps running meanwhile). It is encoded by hand
 
 ## Use cases
 
-- **`start`** — `start(host, plugin_id, pane_id, patterns) -> Started`. Stops
-  when the focused pane is already the overlay; otherwise locates the pane
-  and opens the overlay with the geometry (and the optional pattern subset)
-  in its environment.
+- **`start`** — `start(host, plugin_id, pane_id, source, patterns) -> Started`.
+  Stops when the focused pane is already the overlay; otherwise locates the
+  pane and opens the overlay with the geometry (and link mode or the optional
+  pattern subset) in its environment.
 - **`pick`** — `pick(request, deps) -> Picked`. Reads the pane, builds the
-  screen and the session, hands them to the picker, then dispatches the
+  screen and the session (in link mode from the links the host reports,
+  falling back to the patterns with a notice), hands them to the picker, then dispatches the
   selection to the action bound to the modifier: copy, paste, open, shell
   command (text on stdin, `MODIFIER` and `HINT` in the environment), or
   nothing. Returns a line for the log.

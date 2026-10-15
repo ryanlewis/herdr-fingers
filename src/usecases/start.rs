@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use thiserror::Error;
 
+use super::pick::HintSource;
 use super::ports::{PaneHost, PortError};
 use crate::domain::geometry::{GeometryError, OverlayGeometry};
 use crate::domain::patterns::{self, PatternError};
@@ -13,6 +14,8 @@ use crate::domain::patterns::{self, PatternError};
 pub const GEOMETRY_ENV: &str = "HERDR_FINGERS_GEOMETRY";
 /// Environment variable carrying a comma-separated pattern subset.
 pub const PATTERNS_ENV: &str = "HERDR_FINGERS_PATTERNS";
+/// Environment variable set when the overlay hints links rather than matches.
+pub const LINKS_ENV: &str = "HERDR_FINGERS_LINKS";
 /// The pane title declared in `herdr-plugin.toml` for the overlay.
 pub const OVERLAY_TITLE: &str = "Fingers";
 /// The pane entrypoint declared in `herdr-plugin.toml` for the overlay.
@@ -36,11 +39,13 @@ pub enum Started {
     AlreadyOpen,
 }
 
-/// Opens the overlay over `pane_id`, restricted to `patterns` when given.
+/// Opens the overlay over `pane_id`, hinting what `source` finds, restricted
+/// to `patterns` when given.
 pub fn start(
     host: &dyn PaneHost,
     plugin_id: &str,
     pane_id: &str,
+    source: HintSource,
     patterns: Option<&[&str]>,
 ) -> Result<Started, StartError> {
     if host.pane_label(pane_id)?.as_deref() == Some(OVERLAY_TITLE) {
@@ -53,6 +58,9 @@ pub fn start(
     if let Some(names) = patterns {
         patterns::builtin_specs(names)?;
         env.insert(PATTERNS_ENV.to_string(), names.join(","));
+    }
+    if source == HintSource::Links {
+        env.insert(LINKS_ENV.to_string(), "1".to_string());
     }
     let overlay = host.open_overlay(plugin_id, OVERLAY_ENTRYPOINT, env)?;
     Ok(Started::Opened(overlay))
@@ -67,7 +75,14 @@ mod tests {
     #[test]
     fn the_overlay_opens_with_the_focused_pane_geometry_in_its_environment() {
         let host = FakeHost::with_split_layout("w1:p2");
-        let started = start(&host, "io.rlew.fingers", "w1:p2", None).unwrap();
+        let started = start(
+            &host,
+            "io.rlew.fingers",
+            "w1:p2",
+            HintSource::Patterns,
+            None,
+        )
+        .unwrap();
         assert_eq!(started, Started::Opened("w1:p9".into()));
         let opened = host.opened.borrow();
         let (plugin, entrypoint, env) = &opened[0];
@@ -77,13 +92,21 @@ mod tests {
         assert_eq!(geometry.pane_id, "w1:p2");
         assert_eq!(geometry.pane, Rect::new(51, 0, 49, 40));
         assert!(!env.contains_key(PATTERNS_ENV));
+        assert!(!env.contains_key(LINKS_ENV));
+    }
+
+    #[test]
+    fn link_mode_travels_to_the_overlay() {
+        let host = FakeHost::with_split_layout("w1:p2");
+        start(&host, "id", "w1:p2", HintSource::Links, None).unwrap();
+        assert_eq!(host.opened.borrow()[0].2[LINKS_ENV], "1");
     }
 
     #[test]
     fn nothing_happens_when_the_focused_pane_is_already_the_overlay() {
         let host = FakeHost::with_split_layout("w1:p2").labelled(OVERLAY_TITLE);
         assert_eq!(
-            start(&host, "id", "w1:p2", None).unwrap(),
+            start(&host, "id", "w1:p2", HintSource::Patterns, None).unwrap(),
             Started::AlreadyOpen
         );
         assert!(host.opened.borrow().is_empty());
@@ -92,10 +115,17 @@ mod tests {
     #[test]
     fn a_pattern_subset_travels_along_and_unknown_names_are_refused() {
         let host = FakeHost::with_split_layout("w1:p2");
-        start(&host, "id", "w1:p2", Some(&["url", "path"])).unwrap();
+        start(
+            &host,
+            "id",
+            "w1:p2",
+            HintSource::Patterns,
+            Some(&["url", "path"]),
+        )
+        .unwrap();
         assert_eq!(host.opened.borrow()[0].2[PATTERNS_ENV], "url,path");
 
-        let error = start(&host, "id", "w1:p2", Some(&["nope"])).unwrap_err();
+        let error = start(&host, "id", "w1:p2", HintSource::Patterns, Some(&["nope"])).unwrap_err();
         assert!(matches!(error, StartError::Pattern(_)));
         assert_eq!(host.opened.borrow().len(), 1);
     }
@@ -103,7 +133,7 @@ mod tests {
     #[test]
     fn a_pane_missing_from_the_layout_is_an_error() {
         let host = FakeHost::with_split_layout("w1:p2");
-        let error = start(&host, "id", "w9:p9", None).unwrap_err();
+        let error = start(&host, "id", "w9:p9", HintSource::Patterns, None).unwrap_err();
         assert!(matches!(error, StartError::Geometry(_)));
     }
 }

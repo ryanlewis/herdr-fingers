@@ -177,6 +177,25 @@ impl HerdrClient {
             })
     }
 
+    /// The link at a cell of the pane's viewport, through `pane.link.activate`:
+    /// Herdr reports the address and runs any plugin link handler matching
+    /// it, but opens nothing itself. The pane must be on screen.
+    pub fn link_at(
+        &self,
+        pane_id: &str,
+        row: usize,
+        col: u16,
+    ) -> Result<Option<String>, HerdrError> {
+        let Ok(row) = u16::try_from(row) else {
+            return Ok(None);
+        };
+        let result = self.call(
+            "pane.link.activate",
+            json!({ "pane_id": pane_id, "viewport_row": row, "col": col }),
+        )?;
+        Ok(result["url"].as_str().map(str::to_string))
+    }
+
     fn pane_info(&self, pane_id: &str) -> Result<Value, HerdrError> {
         let result = self.call("pane.get", json!({ "pane_id": pane_id }))?;
         Ok(result.get("pane").cloned().unwrap_or(result))
@@ -276,6 +295,10 @@ impl PaneHost for HerdrClient {
 
     fn read_visible(&self, pane_id: &str) -> Result<String, PortError> {
         Ok(HerdrClient::read_visible(self, pane_id)?)
+    }
+
+    fn link_at(&self, pane_id: &str, row: usize, col: u16) -> Result<Option<String>, PortError> {
+        Ok(HerdrClient::link_at(self, pane_id, row, col)?)
     }
 
     fn pane_label(&self, pane_id: &str) -> Result<Option<String>, PortError> {
@@ -416,6 +439,27 @@ mod tests {
         assert_eq!(requests[0]["params"]["source"], "visible");
         assert_eq!(requests[0]["params"]["format"], "ansi");
         assert_eq!(requests[0]["params"]["strip_ansi"], false);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_link_is_looked_up_at_a_viewport_cell_and_a_plain_cell_has_none() {
+        let (path, server) = fake_herdr(vec![
+            json!({"type": "pane_link_activated", "handled": false, "url": "file:///tmp/a.md"}),
+            json!({"type": "pane_link_activated", "handled": false, "url": null}),
+        ]);
+        let client = HerdrClient::new(&path);
+        assert_eq!(
+            client.link_at("w1:p1", 3, 7).unwrap().as_deref(),
+            Some("file:///tmp/a.md")
+        );
+        assert_eq!(client.link_at("w1:p1", 0, 0).unwrap(), None);
+        let requests = server.join().unwrap();
+        assert_eq!(requests[0]["method"], "pane.link.activate");
+        assert_eq!(
+            requests[0]["params"],
+            json!({"pane_id": "w1:p1", "viewport_row": 3, "col": 7})
+        );
         let _ = std::fs::remove_file(path);
     }
 
