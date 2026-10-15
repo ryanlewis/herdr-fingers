@@ -173,16 +173,20 @@ The first rule that applies wins:
 2. **A web link** (`http://`, `https://`): the browser, through `open` on
    macOS or `xdg-open` on Linux. Other links (`file://`, `ssh://`, `ftp://`,
    `git://`, `git@…`) are not opened.
-3. **A Git SHA**: its commit page, when the pane's directory is in a Git
-   repository whose `origin` is on github.com. Otherwise the SHA is copied.
+3. **A Git SHA** (with at least one letter; long numbers are not taken for
+   SHAs): its commit page, when the pane's directory is in a Git repository
+   whose `origin` is on github.com. Otherwise the SHA is copied.
 4. **A path**: a trailing `:line` or `:line:col` (as in compiler and grep
    output) is kept as the line to jump to; `~` is your home directory; a
    relative path is taken from the pane's working directory, and a diff's
-   `a/` or `b/` prefix is dropped when the prefixed path does not exist.
+   `a/` or `b/` prefix, or a full stop at the end, is dropped when the path
+   as written does not exist.
    - a folder opens with the system opener (Finder on macOS);
-   - a program — an executable file, or a `.app`, `.command`, `.terminal`,
-     `.tool`, `.workflow`, `.pkg`, `.dmg` or `.sh` — is never run: it is
-     shown in its folder instead (`open -R` on macOS, the folder on Linux);
+   - a program or installer — an executable file, or a `.app`, `.command`,
+     `.terminal`, `.tool`, `.workflow`, `.action`, `.pkg`, `.mpkg`, `.dmg`,
+     `.sh`, `.prefPane`, `.saver`, `.appex`, `.qlgenerator` or `.kext`, also
+     when reached through a link — is never run: it is shown in its folder
+     instead (`open -R` on macOS, the folder on Linux);
    - any other file opens in your editor, in a new pane beside the one
      the hints came from.
 5. Anything else: nothing.

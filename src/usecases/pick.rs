@@ -74,7 +74,8 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
     };
     let screen = Screen::from_ansi(&deps.host.read_visible(request.pane_id)?, width);
     let candidates = find_candidates(&screen, &request.settings.patterns);
-    let mut session = Session::new(candidates, &request.settings.alphabet);
+    let fresh_session = || Session::new(candidates.clone(), &request.settings.alphabet);
+    let mut session = fresh_session();
     let mut notice = request.notice.map(str::to_string);
     loop {
         let view = PickView {
@@ -90,9 +91,13 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
                 let cwd = deps.host.pane_cwd(request.pane_id).unwrap_or(None);
                 match dispatch(&selection, request, cwd.as_deref(), deps)? {
                     Dispatched::Done(message) => return Ok(Picked::Done(message)),
-                    // Nothing happened: keep the hints up and say why, so
-                    // another key (Ctrl to copy, say) can still be used.
-                    Dispatched::Refused(reason) => notice = Some(reason),
+                    // Nothing happened: keep the hints up and say why, and
+                    // start over so another key (Ctrl to copy, say) acts on
+                    // one hint rather than the refused multi-selection.
+                    Dispatched::Refused(reason) => {
+                        notice = Some(reason);
+                        session = fresh_session();
+                    }
                 }
             }
             Outcome::Cancelled | Outcome::Continue => return Ok(Picked::Cancelled),
@@ -619,6 +624,21 @@ mod tests {
         assert!(world.launcher.opened.borrow().is_empty());
         assert!(world.launcher.revealed.borrow().is_empty());
         assert_eq!(picked, Picked::Done("copied 1 item (10 chars)".into()));
+    }
+
+    #[test]
+    fn after_a_refused_multi_select_ctrl_copies_a_single_hint() {
+        let mut world = World::new(&[
+            Key::Tab,
+            Key::Hint('a', Modifier::Main),
+            Key::Hint('s', Modifier::Main),
+            Key::Enter,
+            Key::Hint('a', Modifier::Ctrl),
+        ]);
+        let picked = world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(world.clipboard.copied, vec!["https://x.io/docs"]);
+        assert!(world.launcher.opened.borrow().is_empty());
+        assert_eq!(picked, Picked::Done("copied 1 item (17 chars)".into()));
     }
 
     #[test]

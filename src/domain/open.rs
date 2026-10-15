@@ -174,7 +174,21 @@ const PATH_PATTERNS: &[&str] = &["path", "git-status", "diff"];
 
 /// Opening these would run something, so they are only ever revealed.
 const LAUNCHABLE_EXTENSIONS: &[&str] = &[
-    "app", "command", "terminal", "tool", "workflow", "pkg", "dmg", "sh",
+    "app",
+    "command",
+    "terminal",
+    "tool",
+    "workflow",
+    "pkg",
+    "mpkg",
+    "dmg",
+    "sh",
+    "prefpane",
+    "saver",
+    "appex",
+    "qlgenerator",
+    "kext",
+    "action",
 ];
 
 /// Everything about one picked text the resolver needs.
@@ -211,7 +225,9 @@ pub fn resolve<S: Surroundings + ?Sized>(
             OpenTarget::Refused(Refusal::Scheme(scheme))
         };
     }
-    if request.pattern == SHA_PATTERN {
+    // The sha pattern also catches long numbers (timestamps, ids); a commit
+    // that is all digits is rare enough to leave to a copy.
+    if request.pattern == SHA_PATTERN && text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
         return request
             .cwd
             .and_then(|cwd| surroundings.git_origin(cwd))
@@ -262,27 +278,21 @@ fn resolve_path<S: Surroundings + ?Sized>(
     request: &OpenRequest<'_>,
     surroundings: &S,
 ) -> OpenTarget {
-    let (written, line) = split_line_suffix(request.text);
-    let Some(path) = absolute(written, request.cwd, request.home) else {
-        return OpenTarget::Refused(Refusal::NotFound(PathBuf::from(written)));
-    };
-    let mut found = (path.clone(), surroundings.kind(&path));
-    if found.1 == PathKind::Missing
-        && let Some(unprefixed) = written
-            .strip_prefix("a/")
-            .or_else(|| written.strip_prefix("b/"))
-        && let Some(retry) = absolute(unprefixed, request.cwd, request.home)
-    {
-        let kind = surroundings.kind(&retry);
-        if kind != PathKind::Missing {
-            found = (retry, kind);
+    // A path that ends a sentence is matched with its full stop.
+    let without_full_stop = request.text.trim_end_matches('.');
+    let located = locate(request.text, request, surroundings).or_else(|missing| {
+        if without_full_stop.is_empty() || without_full_stop == request.text {
+            return Err(missing);
         }
-    }
-    let (path, kind) = found;
+        locate(without_full_stop, request, surroundings).map_err(|_| missing)
+    });
+    let (path, kind, line) = match located {
+        Ok(found) => found,
+        Err(missing) => return OpenTarget::Refused(Refusal::NotFound(missing)),
+    };
     // The opener follows links, so a link named `docs` to an app bundle
     // would launch it: what the path leads to counts too.
-    let launchable = kind != PathKind::Missing
-        && (is_launchable(&path) || is_launchable(&surroundings.real_path(&path)));
+    let launchable = is_launchable(&path) || is_launchable(&surroundings.real_path(&path));
     match kind {
         PathKind::Missing => OpenTarget::Refused(Refusal::NotFound(path)),
         PathKind::Executable => OpenTarget::Reveal(path),
@@ -290,6 +300,34 @@ fn resolve_path<S: Surroundings + ?Sized>(
         PathKind::Directory => OpenTarget::Directory(path),
         PathKind::File => OpenTarget::Edit(FileLocation { path, line }),
     }
+}
+
+/// The existing path `text` names, its kind and line; or, when there is
+/// none, the path to report as not found.
+fn locate<S: Surroundings + ?Sized>(
+    text: &str,
+    request: &OpenRequest<'_>,
+    surroundings: &S,
+) -> Result<(PathBuf, PathKind, Option<u32>), PathBuf> {
+    let (written, line) = split_line_suffix(text);
+    let Some(path) = absolute(written, request.cwd, request.home) else {
+        return Err(PathBuf::from(written));
+    };
+    let kind = surroundings.kind(&path);
+    if kind != PathKind::Missing {
+        return Ok((path, kind, line));
+    }
+    let unprefixed = written
+        .strip_prefix("a/")
+        .or_else(|| written.strip_prefix("b/"))
+        .and_then(|unprefixed| absolute(unprefixed, request.cwd, request.home));
+    if let Some(retry) = unprefixed {
+        let kind = surroundings.kind(&retry);
+        if kind != PathKind::Missing {
+            return Ok((retry, kind, line));
+        }
+    }
+    Err(path)
 }
 
 fn is_launchable(path: &Path) -> bool {
@@ -503,6 +541,34 @@ mod tests {
     }
 
     #[test]
+    fn a_number_the_sha_pattern_caught_is_not_a_commit() {
+        let machine = Machine::default().with_origin("git@github.com:o/r.git");
+        assert_eq!(
+            open("1700000000", SHA_PATTERN, &machine),
+            OpenTarget::Refused(Refusal::NothingToOpen)
+        );
+    }
+
+    #[test]
+    fn a_path_ending_a_sentence_drops_the_full_stop_when_needed() {
+        let machine = Machine::default()
+            .with("/home/me/notes/todo.md", PathKind::File)
+            .with("/work/repo/src/x.rs", PathKind::File);
+        assert_eq!(
+            open("~/notes/todo.md.", "path", &machine),
+            edit("/home/me/notes/todo.md", None)
+        );
+        assert_eq!(
+            open("src/x.rs:12.", "path", &machine),
+            edit("/work/repo/src/x.rs", Some(12))
+        );
+        assert_eq!(
+            open("src/gone.rs.", "path", &machine),
+            OpenTarget::Refused(Refusal::NotFound("/work/repo/src/gone.rs.".into()))
+        );
+    }
+
+    #[test]
     fn a_relative_file_opens_in_the_editor_at_its_line() {
         let machine = Machine::default().with("/work/repo/src/x.rs", PathKind::File);
         assert_eq!(
@@ -581,7 +647,15 @@ mod tests {
             .with("/work/repo/Calc.app", PathKind::Directory)
             .with("/work/repo/setup.sh", PathKind::File)
             .with("/work/repo/Installer.PKG", PathKind::File)
+            .with("/work/repo/Driver.mpkg", PathKind::Directory)
+            .with("/work/repo/Foo.prefPane", PathKind::Directory)
             .with("/work/repo/src", PathKind::Directory);
+        for bundle in ["Driver.mpkg", "Foo.prefPane"] {
+            assert_eq!(
+                open(&format!("./{bundle}"), "path", &machine),
+                OpenTarget::Reveal(format!("/work/repo/{bundle}").into())
+            );
+        }
         assert_eq!(
             open("./run", "path", &machine),
             OpenTarget::Reveal("/work/repo/run".into())
