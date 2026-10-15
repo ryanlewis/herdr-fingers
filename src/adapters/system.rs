@@ -150,6 +150,10 @@ impl Surroundings for SystemFiles {
         }
     }
 
+    fn real_path(&self, path: &Path) -> PathBuf {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+
     fn git_origin(&self, dir: &Path) -> Option<String> {
         let output = Command::new("git")
             .arg("-C")
@@ -264,6 +268,17 @@ mod tests {
         assert_eq!(SystemFiles.kind(&plain), PathKind::File);
         assert_eq!(SystemFiles.kind(&script), PathKind::Executable);
         assert_eq!(SystemFiles.kind(&dir.join("gone")), PathKind::Missing);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_link_leads_to_its_real_path() {
+        let dir = temp_dir("links");
+        let bundle = dir.join("Calc.app");
+        std::fs::create_dir_all(&bundle).unwrap();
+        std::os::unix::fs::symlink(&bundle, dir.join("docs")).unwrap();
+        assert_eq!(SystemFiles.real_path(&dir.join("docs")), bundle);
+        assert_eq!(SystemFiles.real_path(&dir.join("gone")), dir.join("gone"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

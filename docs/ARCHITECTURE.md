@@ -33,7 +33,7 @@ cases need. Each has a real adapter and an in-memory fake in
 | `Picker` | `TerminalPicker` (ratatui event loop) | `ScriptedPicker` (feeds keys to the real `Session`) | `pick(view, session) -> Outcome` |
 | `Clipboard` | `SystemClipboard` (OSC 52 and/or a command) | `RecordingClipboard` | `copy(text)` |
 | `Launcher` | `SystemLauncher` (`open`/`xdg-open`, shell command lines) | `RecordingLauncher` | `open(target, cwd)`, `reveal(path)`, `run(command_line, stdin, env, cwd)` |
-| `FileSystem` | `SystemFiles` (file metadata, `git remote get-url`) | `FakeFiles` | `kind(path)`, `git_origin(dir)`, `home_dir` |
+| `FileSystem` | `SystemFiles` (file metadata, `git remote get-url`) | `FakeFiles` | `kind(path)`, `real_path(path)`, `git_origin(dir)`, `home_dir` |
 
 Errors cross a port as `PortError(String)`: by the time they reach a use
 case there is nothing to do but show them.
@@ -86,7 +86,7 @@ keeps running meanwhile). It is encoded by hand
 - **`open`** — `resolve`: what `:open:` does with a picked text (a URL, a
   folder, a file to edit at a line, something to reveal, or a refusal), from
   the text, its pattern, the pattern's `open_url` and facts asked of a
-  `Surroundings` (path kinds, the Git `origin`). Also `UrlTemplate` and
+  `Surroundings` (path kinds, where links lead, the Git `origin`). Also `UrlTemplate` and
   `EditorCommand`.
 - **`hints`** — prefix-free labels over an alphabet: single keys first, then
   the worst key is expanded into two-key labels, and so on. Sorted shortest
