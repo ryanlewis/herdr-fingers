@@ -202,9 +202,10 @@ The first rule that applies wins:
    - any other file, scripts and executables included, opens in your
      editor, in a new pane beside the one the hints came from. With no
      editor, files are shown in their folder, never run.
-5. **Any other text that names an existing file or folder**, such as
-   `README.md` caught by a custom pattern, looked for in the same places
-   as a relative path, is opened as a path.
+5. **Text a custom pattern caught that names an existing file or folder**,
+   such as `README.md`, looked for in the same places as a relative path,
+   is opened as a path. Numbers, addresses and ids the built-in patterns
+   catch are never taken for file names.
 6. Anything else: nothing.
 
 When nothing can be opened (a missing file, a refused link, a number), the

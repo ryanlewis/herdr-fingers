@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use thiserror::Error;
 
+use super::patterns::BUILTIN_PATTERNS;
+
 /// A URL with `{}` where the picked text goes, such as
 /// `https://example.atlassian.net/browse/{}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,6 +320,15 @@ pub fn resolve<S: Surroundings + ?Sized>(
     }
     let looks_like_a_path =
         PATH_PATTERNS.contains(&request.pattern) || text.contains('/') || text.starts_with('~');
+    // A number, address or id a built-in pattern caught names no file, even
+    // where some folder happens to share it; only custom patterns hold bare
+    // file names.
+    let builtin = BUILTIN_PATTERNS
+        .iter()
+        .any(|&(name, _)| name == request.pattern);
+    if !looks_like_a_path && builtin {
+        return OpenTarget::Refused(Refusal::NothingToOpen);
+    }
     match locate(request, surroundings) {
         Located::Found(path, kind, line) => open_found(path, kind, line, surroundings),
         Located::Ambiguous { path, places } => {
@@ -1273,6 +1284,24 @@ mod tests {
             open("CHANGELOG.md", "custom", &machine),
             OpenTarget::Refused(Refusal::NothingToOpen)
         );
+    }
+
+    #[test]
+    fn a_number_or_id_never_opens_a_file_of_the_same_name() {
+        let machine = Machine::default()
+            .with("/work/repo/20260727", PathKind::Directory)
+            .with("/work/repo/10.0.0.1", PathKind::File);
+        for (text, pattern) in [
+            ("20260727", "digit"),
+            ("10.0.0.1", "ip"),
+            ("20260727", SHA_PATTERN),
+        ] {
+            assert_eq!(
+                open(text, pattern, &machine),
+                OpenTarget::Refused(Refusal::NothingToOpen),
+                "{pattern}"
+            );
+        }
     }
 
     #[test]
