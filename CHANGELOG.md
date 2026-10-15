@@ -14,8 +14,8 @@ the plugin notices; the build pipeline and the docs live in the commit history.
   `["~/dev/*"]`), where it opens only when exactly one folder has the path.
 - `:open:` on a Git SHA outside a GitHub repository uses the nearest
   GitHub link or GitHub repository named on the screen.
-- `:open:` opens any match that names an existing file or folder, such as
-  `README.md`, even without a `/`.
+- `:open:` opens a custom pattern's match that names an existing file or
+  folder, such as `README.md`, even without a `/`.
 
 ### Changed
 - Scripts and executable files open in the editor instead of being shown
