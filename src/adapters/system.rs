@@ -170,18 +170,21 @@ impl Surroundings for SystemFiles {
         Some(url.trim().to_string()).filter(|url| !url.is_empty())
     }
 
-    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
-        // Enough for any folder of projects; a huge folder is cut short
-        // rather than read whole on every pick.
-        const MAX_ENTRIES: usize = 1000;
+    fn subdirectories(&self, dir: &Path, at_most: usize) -> Vec<PathBuf> {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
+        // The entry type comes with the listing, so only links cost a stat.
+        let is_folder = |entry: &std::fs::DirEntry| match entry.file_type() {
+            Ok(kind) if kind.is_symlink() => entry.path().is_dir(),
+            Ok(kind) => kind.is_dir(),
+            Err(_) => false,
+        };
         let mut folders: Vec<PathBuf> = entries
-            .take(MAX_ENTRIES)
             .filter_map(Result::ok)
+            .filter(is_folder)
             .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
+            .take(at_most)
             .collect();
         folders.sort();
         folders
@@ -294,11 +297,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("b/deep")).unwrap();
         std::fs::create_dir_all(dir.join("a")).unwrap();
         std::fs::write(dir.join("file"), "x").unwrap();
+        std::os::unix::fs::symlink(dir.join("a"), dir.join("c")).unwrap();
         assert_eq!(
-            SystemFiles.subdirectories(&dir),
-            vec![dir.join("a"), dir.join("b")]
+            SystemFiles.subdirectories(&dir, 10),
+            vec![dir.join("a"), dir.join("b"), dir.join("c")]
         );
-        assert!(SystemFiles.subdirectories(&dir.join("gone")).is_empty());
+        assert_eq!(SystemFiles.subdirectories(&dir, 2).len(), 2);
+        assert!(SystemFiles.subdirectories(&dir.join("gone"), 10).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 
