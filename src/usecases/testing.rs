@@ -246,6 +246,10 @@ impl Surroundings for FakeFiles {
         self.kinds.get(path).copied().unwrap_or(PathKind::Missing)
     }
 
+    fn real_path(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
+
     fn git_origin(&self, _dir: &Path) -> Option<String> {
         self.origin.clone()
     }

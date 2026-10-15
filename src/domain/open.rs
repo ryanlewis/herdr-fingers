@@ -190,6 +190,8 @@ pub struct OpenRequest<'a> {
 /// What the resolver asks of the machine it runs on.
 pub trait Surroundings {
     fn kind(&self, path: &Path) -> PathKind;
+    /// Where `path` leads once every link in it is followed.
+    fn real_path(&self, path: &Path) -> PathBuf;
     /// The `origin` remote URL of the Git repository containing `dir`.
     fn git_origin(&self, dir: &Path) -> Option<String>;
 }
@@ -277,12 +279,10 @@ fn resolve_path<S: Surroundings + ?Sized>(
         }
     }
     let (path, kind) = found;
-    let launchable = path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            LAUNCHABLE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-        });
+    // The opener follows links, so a link named `docs` to an app bundle
+    // would launch it: what the path leads to counts too.
+    let launchable = kind != PathKind::Missing
+        && (is_launchable(&path) || is_launchable(&surroundings.real_path(&path)));
     match kind {
         PathKind::Missing => OpenTarget::Refused(Refusal::NotFound(path)),
         PathKind::Executable => OpenTarget::Reveal(path),
@@ -290,6 +290,14 @@ fn resolve_path<S: Surroundings + ?Sized>(
         PathKind::Directory => OpenTarget::Directory(path),
         PathKind::File => OpenTarget::Edit(FileLocation { path, line }),
     }
+}
+
+fn is_launchable(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            LAUNCHABLE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
+        })
 }
 
 /// `src/x.rs:12:3` is `src/x.rs` at line 12; the column is dropped.
@@ -336,12 +344,18 @@ mod tests {
     #[derive(Default)]
     struct Machine {
         kinds: BTreeMap<PathBuf, PathKind>,
+        links: BTreeMap<PathBuf, PathBuf>,
         origin: Option<String>,
     }
 
     impl Machine {
         fn with(mut self, path: &str, kind: PathKind) -> Self {
             self.kinds.insert(PathBuf::from(path), kind);
+            self
+        }
+
+        fn linking(mut self, link: &str, to: &str) -> Self {
+            self.links.insert(PathBuf::from(link), PathBuf::from(to));
             self
         }
 
@@ -354,6 +368,13 @@ mod tests {
     impl Surroundings for Machine {
         fn kind(&self, path: &Path) -> PathKind {
             self.kinds.get(path).copied().unwrap_or(PathKind::Missing)
+        }
+
+        fn real_path(&self, path: &Path) -> PathBuf {
+            self.links
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| path.to_path_buf())
         }
 
         fn git_origin(&self, _dir: &Path) -> Option<String> {
@@ -584,6 +605,17 @@ mod tests {
         assert_eq!(
             open("./src", "path", &machine),
             OpenTarget::Directory("/work/repo/src".into())
+        );
+    }
+
+    #[test]
+    fn a_link_to_an_app_bundle_is_revealed_whatever_its_own_name() {
+        let machine = Machine::default()
+            .with("/work/repo/docs", PathKind::Directory)
+            .linking("/work/repo/docs", "/Applications/Calc.app");
+        assert_eq!(
+            open("./docs", "path", &machine),
+            OpenTarget::Reveal("/work/repo/docs".into())
         );
     }
 
