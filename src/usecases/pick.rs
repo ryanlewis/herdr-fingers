@@ -10,7 +10,7 @@ use super::ports::{
 };
 use crate::domain::geometry::OverlayGeometry;
 use crate::domain::links::{self, LINK_PATTERN};
-use crate::domain::matcher::{Candidate, find_candidates};
+use crate::domain::matcher::{Candidate, Origin, find_candidates};
 use crate::domain::open::{self, FileLocation, OpenRequest, OpenTarget, ScreenMatch};
 use crate::domain::screen::Screen;
 use crate::domain::session::{Outcome, Selection, Session};
@@ -164,10 +164,18 @@ fn find_links(
         .rev()
         .take(MAX_LINK_LOOKUPS)
     {
-        if let Some(url) = host.link_at(pane_id, run.row, run.col)? {
+        // A first failure means the host can't answer at all; a later one
+        // (the pane redrew mid-scan) should not cost the links already found.
+        let url = match host.link_at(pane_id, run.row, run.col) {
+            Ok(url) => url,
+            Err(_) if !found.is_empty() => break,
+            Err(error) => return Err(error),
+        };
+        if let Some(url) = url {
             found.push(Candidate {
                 text: url,
                 pattern: LINK_PATTERN.to_string(),
+                origin: Origin::HostLink,
                 segments: vec![run],
             });
         }
@@ -261,6 +269,7 @@ fn open_all(
             let request = OpenRequest {
                 text: &pick.text,
                 pattern: &pick.pattern,
+                origin: pick.origin,
                 url_template: request.settings.patterns.open_url(&pick.pattern),
                 cwd,
                 home: home.as_deref(),
@@ -660,6 +669,17 @@ mod tests {
             )
         );
         assert_eq!(world.clipboard.copied, vec!["https://x.io/docs"]);
+    }
+
+    #[test]
+    fn a_lookup_failing_after_links_were_found_keeps_those_links() {
+        let mut world = link_world(&[Key::Hint('a', Modifier::Ctrl)]);
+        world.host = world
+            .host
+            .failing_links_after(1, "pane content changed during link activation");
+        world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(world.picker.seen_notice, None);
+        assert_eq!(world.clipboard.copied, vec!["file:///work/notes.md"]);
     }
 
     #[test]

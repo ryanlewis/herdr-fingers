@@ -37,6 +37,8 @@ pub(crate) struct FakeHost {
     pub links: BTreeMap<(usize, u16), String>,
     /// Set when the host cannot look links up, with its error.
     pub links_fail: Option<String>,
+    /// How many lookups succeed before `links_fail` applies.
+    pub links_fail_after: usize,
     pub link_calls: RefCell<Vec<(usize, u16)>>,
     pub layout_calls: RefCell<Vec<String>>,
     pub sent: RefCell<Vec<(String, String)>>,
@@ -55,6 +57,7 @@ impl FakeHost {
             reads_fail: false,
             links: BTreeMap::new(),
             links_fail: None,
+            links_fail_after: 0,
             link_calls: RefCell::new(Vec::new()),
             layout_calls: RefCell::new(Vec::new()),
             sent: RefCell::new(Vec::new()),
@@ -114,8 +117,13 @@ impl FakeHost {
         self
     }
 
-    pub fn failing_links(mut self, error: &str) -> Self {
+    pub fn failing_links(self, error: &str) -> Self {
+        self.failing_links_after(0, error)
+    }
+
+    pub fn failing_links_after(mut self, lookups: usize, error: &str) -> Self {
         self.links_fail = Some(error.to_string());
+        self.links_fail_after = lookups;
         self
     }
 }
@@ -137,7 +145,9 @@ impl PaneHost for FakeHost {
 
     fn link_at(&self, _pane_id: &str, row: usize, col: u16) -> Result<Option<String>, PortError> {
         self.link_calls.borrow_mut().push((row, col));
-        if let Some(error) = &self.links_fail {
+        if let Some(error) = &self.links_fail
+            && self.link_calls.borrow().len() > self.links_fail_after
+        {
             return Err(PortError::new(error));
         }
         Ok(self.links.get(&(row, col)).cloned())

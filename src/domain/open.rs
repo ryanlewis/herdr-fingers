@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use thiserror::Error;
 
-use super::links::{self, LINK_PATTERN};
+use super::links;
+use super::matcher::Origin;
 use super::patterns::BUILTIN_PATTERNS;
 
 /// A URL with `{}` where the picked text goes, such as
@@ -274,6 +275,7 @@ pub struct ScreenMatch<'a> {
 pub struct OpenRequest<'a> {
     pub text: &'a str,
     pub pattern: &'a str,
+    pub origin: Origin,
     pub url_template: Option<&'a UrlTemplate>,
     /// The source pane's working directory.
     pub cwd: Option<&'a Path>,
@@ -307,12 +309,13 @@ pub fn resolve<S: Surroundings + ?Sized>(
     }
     // A link the host reported names a file it was drawn for; a `file://`
     // URL merely printed on screen is still refused below.
-    if request.pattern == LINK_PATTERN
+    if request.origin == Origin::HostLink
         && let Some(path) = links::file_url_path(text)
     {
         let as_path = OpenRequest {
             text: &path,
             pattern: "path",
+            origin: Origin::Pattern,
             ..*request
         };
         return resolve(&as_path, surroundings);
@@ -851,6 +854,7 @@ mod tests {
     struct Ask<'a> {
         text: &'a str,
         pattern: &'a str,
+        origin: Origin,
         cwd: &'a str,
         row: usize,
         screen: Vec<ScreenMatch<'a>>,
@@ -862,11 +866,17 @@ mod tests {
             Ask {
                 text,
                 pattern,
+                origin: Origin::Pattern,
                 cwd: "/work/repo",
                 row: 0,
                 screen: Vec::new(),
                 search_roots: Vec::new(),
             }
+        }
+
+        fn reported_by_the_host(mut self) -> Self {
+            self.origin = Origin::HostLink;
+            self
         }
 
         fn from(mut self, cwd: &'a str) -> Self {
@@ -897,6 +907,7 @@ mod tests {
                 &OpenRequest {
                     text: self.text,
                     pattern: self.pattern,
+                    origin: self.origin,
                     url_template: None,
                     cwd: Some(Path::new(self.cwd)),
                     home: Some(Path::new("/home/me")),
@@ -926,6 +937,7 @@ mod tests {
         let request = OpenRequest {
             text: "RET-1234",
             pattern: "jira",
+            origin: Origin::Pattern,
             url_template: Some(&template),
             cwd: None,
             home: None,
@@ -961,24 +973,37 @@ mod tests {
     }
 
     #[test]
-    fn a_file_link_from_link_mode_opens_as_the_path_it_names() {
+    fn a_file_link_the_host_reported_opens_as_the_path_it_names() {
         let machine = Machine::default()
             .with("/work/My Notes/a.md", PathKind::File)
             .with("/Applications/Calc.app", PathKind::Directory);
         assert_eq!(
-            open("file:///work/My%20Notes/a.md", LINK_PATTERN, &machine),
+            Ask::new("file:///work/My%20Notes/a.md", "link")
+                .reported_by_the_host()
+                .resolve(&machine),
             edit("/work/My Notes/a.md", None)
         );
         assert_eq!(
-            open("file:///Applications/Calc.app", LINK_PATTERN, &machine),
+            Ask::new("file:///Applications/Calc.app", "link")
+                .reported_by_the_host()
+                .resolve(&machine),
             OpenTarget::Reveal("/Applications/Calc.app".into())
         );
         assert_eq!(
-            open("file://server/share/a.md", LINK_PATTERN, &machine),
+            open("file:///work/My%20Notes/a.md", "link", &machine),
+            OpenTarget::Refused(Refusal::Scheme("file".into())),
+            "a custom pattern named link is still only text on screen"
+        );
+        assert_eq!(
+            Ask::new("file://server/share/a.md", "link")
+                .reported_by_the_host()
+                .resolve(&machine),
             OpenTarget::Refused(Refusal::Scheme("file".into()))
         );
         assert_eq!(
-            open("ssh://host/x", LINK_PATTERN, &machine),
+            Ask::new("ssh://host/x", "link")
+                .reported_by_the_host()
+                .resolve(&machine),
             OpenTarget::Refused(Refusal::Scheme("ssh".into()))
         );
     }
@@ -1150,6 +1175,7 @@ mod tests {
         let request = OpenRequest {
             text: "-rf/x",
             pattern: "path",
+            origin: Origin::Pattern,
             url_template: None,
             cwd: None,
             home: None,

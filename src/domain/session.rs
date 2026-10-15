@@ -3,7 +3,7 @@
 
 use super::alphabet::Alphabet;
 use super::hints;
-use super::matcher::Candidate;
+use super::matcher::{Candidate, Origin};
 use super::screen::Segment;
 
 /// A candidate with its hint label.
@@ -12,6 +12,7 @@ pub struct Target {
     pub text: String,
     /// The name of the pattern that found the text.
     pub pattern: String,
+    pub origin: Origin,
     pub hint: String,
     pub segments: Vec<Segment>,
 }
@@ -21,6 +22,7 @@ impl Target {
         Pick {
             text: self.text.clone(),
             pattern: self.pattern.clone(),
+            origin: self.origin,
             row: self.segments.first().map_or(0, |segment| segment.row),
         }
     }
@@ -63,6 +65,7 @@ pub enum Key {
 pub struct Pick {
     pub text: String,
     pub pattern: String,
+    pub origin: Origin,
     /// The screen row the text starts on.
     pub row: usize,
 }
@@ -102,7 +105,8 @@ pub struct Session {
 impl Session {
     /// Labels the candidates. Identical texts share a hint; the shortest
     /// hints go to the candidates nearest the bottom of the screen, where
-    /// the freshest output is. A candidate shorter than its hint gets none.
+    /// the freshest output is. A candidate drawn over fewer cells than its
+    /// hint gets none.
     pub fn new(candidates: Vec<Candidate>, alphabet: &Alphabet) -> Self {
         let mut unique_texts: Vec<&str> = Vec::new();
         for candidate in &candidates {
@@ -119,10 +123,11 @@ impl Session {
                 .iter()
                 .find(|(text, _)| *text == candidate.text)
             {
+                Some((_, hint)) if hint.chars().count() > candidate.drawn_width() => continue,
                 Some((_, hint)) => hint.clone(),
                 None => {
                     let Some(hint) = pool.pop_front() else { break };
-                    if hint.chars().count() > candidate.text.chars().count() {
+                    if hint.chars().count() > candidate.drawn_width() {
                         pool.push_front(hint);
                         continue;
                     }
@@ -133,6 +138,7 @@ impl Session {
             targets.push(Target {
                 text: candidate.text.clone(),
                 pattern: candidate.pattern.clone(),
+                origin: candidate.origin,
                 hint,
                 segments: candidate.segments.clone(),
             });
@@ -264,6 +270,7 @@ mod tests {
         Candidate {
             text: text.into(),
             pattern: "test".into(),
+            origin: Origin::Pattern,
             segments: vec![Segment {
                 row,
                 col,
@@ -291,6 +298,7 @@ mod tests {
             .map(|&(text, row)| Pick {
                 text: text.to_string(),
                 pattern: "test".into(),
+                origin: Origin::Pattern,
                 row,
             })
             .collect()
@@ -337,6 +345,53 @@ mod tests {
     }
 
     #[test]
+    fn a_hint_never_covers_more_cells_than_its_candidate_is_drawn_over() {
+        let candidates = (0..6)
+            .map(|row| Candidate {
+                text: format!("https://example.com/{row}"),
+                pattern: "link".into(),
+                origin: Origin::HostLink,
+                segments: vec![Segment {
+                    row,
+                    col: 0,
+                    width: 1,
+                }],
+            })
+            .collect();
+        let session = Session::new(candidates, &alphabet());
+        assert_eq!(session.targets().len(), 3);
+        assert!(
+            session
+                .targets()
+                .iter()
+                .all(|t| t.hint.chars().count() == 1)
+        );
+    }
+
+    #[test]
+    fn a_narrow_copy_of_a_labelled_text_goes_without_the_shared_hint() {
+        let mut candidates: Vec<Candidate> = ["/a", "/b", "/c", "/d", "/e"]
+            .iter()
+            .enumerate()
+            .map(|(row, text)| candidate(text, row, 0))
+            .collect();
+        let mut narrow = candidate("/b", 5, 0);
+        narrow.segments[0].width = 1;
+        candidates.insert(0, narrow);
+        let session = Session::new(candidates, &alphabet());
+        assert!(
+            session
+                .targets()
+                .iter()
+                .all(|t| t.hint.chars().count() <= usize::from(t.segments[0].width))
+        );
+        assert_eq!(
+            session.targets().iter().filter(|t| t.text == "/b").count(),
+            1
+        );
+    }
+
+    #[test]
     fn typing_a_full_hint_picks_that_target_with_its_modifier() {
         let mut session = session(&["/top", "/bottom"]);
         assert_eq!(
@@ -360,6 +415,7 @@ mod tests {
                 picks: vec![Pick {
                     text: "https://x.io".into(),
                     pattern: "url".into(),
+                    origin: Origin::Pattern,
                     row: 0,
                 }],
                 hint: "a".into(),
