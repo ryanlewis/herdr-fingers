@@ -7,6 +7,8 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
 ### Added
 - `:open:` finds a relative path that is not in the pane's directory: it
   also looks in that directory's Git root, in the folders named on the
