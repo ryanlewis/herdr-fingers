@@ -67,7 +67,7 @@ screen, where the freshest output is; identical texts share one hint.
 | `Esc`, `q`, `Ctrl+C` | close |
 
 The status line lists what each key does with your configuration, for
-example `hint copy · ⇧ paste · ⌃ open · tab multi · esc quit · ? help`.
+example `hint open · ⇧ paste · ⌃ copy · tab multi · esc quit · ? help`.
 `⇧`, `⌃` and `⌥` stand for Shift, Ctrl and Alt; a modifier bound to `""` is
 left out, and a command shows its program name. It sits outside the pane or
 after the text on the pane's last row, so it never covers a match. When the
@@ -92,7 +92,7 @@ The tmux-fingers built-ins, ported one for one:
 | `sha` | Git SHAs (7 to 128 hex digits) |
 | `digit` | numbers of four digits or more |
 | `url` | `http(s)://`, `git@`, `git://`, `ssh://`, `ftp://`, `file:///` |
-| `path` | anything with a `/` in it: `src/main.rs`, `~/.config`, `/etc/hosts` |
+| `path` | anything with a `/` in it: `src/main.rs`, `~/.config`, `/etc/hosts`, with a `:line` or `:line:col` after it as compilers and grep print (`src/main.rs:12:3`) |
 | `hex` | `0x…` numbers |
 | `kubernetes` | Kubernetes resource names (`configmap/…`, `deployment.apps/…`) |
 | `kubernetes-pod` | deployment-managed pod names (`nginx-66b6c48dd5-7xb2r`) |

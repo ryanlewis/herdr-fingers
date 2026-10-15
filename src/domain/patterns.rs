@@ -47,7 +47,9 @@ pub const BUILTIN_PATTERNS: &[(&str, &str)] = &[
         "url",
         r#"((https?://|git@|git://|ssh://|ftp://|file:///)[^\s()"']+)"#,
     ),
-    ("path", r"(([.\w\-~\$@]+)?(/[.\w\-@]+)+/?)"),
+    // A `:line` or `:line:col` suffix, as compilers and grep print it, is
+    // part of the match so `:open:` can jump to the line.
+    ("path", r"(([.\w\-~\$@]+)?(/[.\w\-@]+)+/?(:\d+(:\d+)?)?)"),
     ("hex", r"(0x[0-9a-fA-F]+)"),
     ("kubernetes", "KUBERNETES_KINDS_PLACEHOLDER"),
     // Deployment-managed pod names such as "nginx-deployment-66b6c48dd5-7xb2r":
@@ -299,6 +301,24 @@ mod tests {
                 "{name}: expected {expected:?} in {found:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_path_keeps_a_line_and_column_suffix_and_nothing_else() {
+        let set = PatternSet::builtin();
+        assert_eq!(
+            captured(&set, "error at src/x.rs:12:3: oops"),
+            vec![("path", "src/x.rs:12:3")]
+        );
+        assert_eq!(
+            captured(&set, "src/x.rs:12: match"),
+            vec![("path", "src/x.rs:12")]
+        );
+        assert_eq!(
+            captured(&set, "see /etc/hosts."),
+            vec![("path", "/etc/hosts.")]
+        );
+        assert_eq!(captured(&set, "dir/a:b"), vec![("path", "dir/a")]);
     }
 
     #[test]
