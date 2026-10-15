@@ -254,11 +254,12 @@ impl Surroundings for FakeFiles {
         self.origin.clone()
     }
 
-    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
+    fn subdirectories(&self, dir: &Path, at_most: usize) -> Vec<PathBuf> {
         self.kinds
             .iter()
             .filter(|(path, kind)| **kind == PathKind::Directory && path.parent() == Some(dir))
             .map(|(path, _)| path.clone())
+            .take(at_most)
             .collect()
     }
 }

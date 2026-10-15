@@ -143,6 +143,9 @@ pub enum Refusal {
         path: String,
         places: usize,
     },
+    /// The search roots name more folders than are looked in, so a single
+    /// hit may not be the only one.
+    TooManyFolders(String),
     NothingToOpen,
 }
 
@@ -154,6 +157,10 @@ impl fmt::Display for Refusal {
             Refusal::Ambiguous { path, places } => {
                 write!(f, "found in {places} places; not guessing which: {path}")
             }
+            Refusal::TooManyFolders(path) => write!(
+                f,
+                "search_roots name over {MAX_SEARCH_DIRS} folders; not guessing: {path}"
+            ),
             Refusal::NothingToOpen => write!(f, "nothing to open"),
         }
     }
@@ -281,8 +288,9 @@ pub trait Surroundings {
     fn real_path(&self, path: &Path) -> PathBuf;
     /// The `origin` remote URL of the Git repository containing `dir`.
     fn git_origin(&self, dir: &Path) -> Option<String>;
-    /// The folders directly inside `dir`, sorted.
-    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf>;
+    /// The folders directly inside `dir`, sorted; at most `at_most` of them,
+    /// and fewer only when that is all there are.
+    fn subdirectories(&self, dir: &Path, at_most: usize) -> Vec<PathBuf>;
 }
 
 pub fn resolve<S: Surroundings + ?Sized>(
@@ -315,6 +323,7 @@ pub fn resolve<S: Surroundings + ?Sized>(
         Located::Ambiguous { path, places } => {
             OpenTarget::Refused(Refusal::Ambiguous { path, places })
         }
+        Located::Unsure(path) => OpenTarget::Refused(Refusal::TooManyFolders(path)),
         Located::Missing(path) if looks_like_a_path => OpenTarget::Refused(Refusal::NotFound(path)),
         Located::Missing(_) => OpenTarget::Refused(Refusal::NothingToOpen),
     }
@@ -397,6 +406,8 @@ enum Located {
         path: String,
         places: usize,
     },
+    /// In one search folder, but not every search folder was looked in.
+    Unsure(String),
     /// Nowhere; the path to report.
     Missing(PathBuf),
 }
@@ -443,8 +454,9 @@ fn locate<S: Surroundings + ?Sized>(request: &OpenRequest<'_>, surroundings: &S)
             return found(hit);
         }
     }
+    let (dirs, complete) = search_dirs(request, surroundings);
     let mut hits: Vec<(PathBuf, PathKind, Option<u32>)> = Vec::new();
-    for dir in search_dirs(request, surroundings) {
+    for dir in dirs {
         if let Some(hit) = find_under(&dir, &spellings, surroundings) {
             let real = surroundings.real_path(&hit.0);
             if !hits
@@ -457,6 +469,7 @@ fn locate<S: Surroundings + ?Sized>(request: &OpenRequest<'_>, surroundings: &S)
     }
     match hits.len() {
         0 => Located::Missing(missing()),
+        1 if !complete => Located::Unsure(written.to_string()),
         1 => found(hits.remove(0)),
         places => Located::Ambiguous {
             path: written.to_string(),
@@ -588,26 +601,31 @@ fn git_root<S: Surroundings + ?Sized>(dir: &Path, surroundings: &S) -> Option<Pa
         .map(Path::to_path_buf)
 }
 
+/// The folders the search roots name, at most [`MAX_SEARCH_DIRS`] of them,
+/// and whether that is all of them.
 fn search_dirs<S: Surroundings + ?Sized>(
     request: &OpenRequest<'_>,
     surroundings: &S,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, bool) {
     let mut dirs = Vec::new();
     for root in request.search_roots {
         let Some(base) = absolute(&root.dir, None, request.home) else {
             continue;
         };
         if root.each_subdirectory {
-            dirs.extend(surroundings.subdirectories(&base));
+            // One past the cap tells a full list from a cut one.
+            let room = MAX_SEARCH_DIRS + 1 - dirs.len();
+            dirs.extend(surroundings.subdirectories(&base, room));
         } else {
             dirs.push(base);
         }
-        if dirs.len() >= MAX_SEARCH_DIRS {
+        if dirs.len() > MAX_SEARCH_DIRS {
             break;
         }
     }
+    let complete = dirs.len() <= MAX_SEARCH_DIRS;
     dirs.truncate(MAX_SEARCH_DIRS);
-    dirs
+    (dirs, complete)
 }
 
 fn open_found<S: Surroundings + ?Sized>(
@@ -728,11 +746,12 @@ mod tests {
                 .find_map(|folder| self.origins.get(folder).cloned())
         }
 
-        fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
+        fn subdirectories(&self, dir: &Path, at_most: usize) -> Vec<PathBuf> {
             self.kinds
                 .iter()
                 .filter(|(path, kind)| **kind == PathKind::Directory && path.parent() == Some(dir))
                 .map(|(path, _)| path.clone())
+                .take(at_most)
                 .collect()
         }
     }
@@ -1187,6 +1206,25 @@ mod tests {
         assert_eq!(
             refusal.to_string(),
             "found in 4 places; not guessing which: src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn a_relative_path_is_not_taken_as_unique_when_the_search_roots_have_too_many_folders() {
+        let mut machine = Machine::default();
+        for project in 0..=MAX_SEARCH_DIRS {
+            machine = machine.with(&format!("/home/me/dev/p{project:04}"), PathKind::Directory);
+        }
+        let last = format!("/home/me/dev/p{MAX_SEARCH_DIRS:04}/src/x.rs");
+        let machine = machine
+            .with("/home/me/dev/p0000/src/x.rs", PathKind::File)
+            .with(&last, PathKind::File);
+        assert_eq!(
+            Ask::new("src/x.rs", "path")
+                .from("/nowhere")
+                .searching(&["~/dev/*"])
+                .resolve(&machine),
+            OpenTarget::Refused(Refusal::TooManyFolders("src/x.rs".into()))
         );
     }
 
