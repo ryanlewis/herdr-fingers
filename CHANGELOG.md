@@ -7,6 +7,8 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-15
+
 ### Added
 - A `links` action hints links printed under a label (`PR #42`, a file
   name), asking Herdr for the address under coloured or underlined text.
