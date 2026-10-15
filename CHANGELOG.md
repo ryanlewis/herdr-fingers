@@ -7,6 +7,21 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+### Added
+- `:open:` finds a relative path that is not in the pane's directory: it
+  also looks in that directory's Git root, in the folders named on the
+  screen (nearest first), and in the new `search_roots` setting (default
+  `["~/dev/*"]`), where it opens only when exactly one folder has the path.
+- `:open:` on a Git SHA outside a GitHub repository uses the nearest
+  GitHub link or GitHub repository named on the screen.
+- `:open:` opens any match that names an existing file or folder, such as
+  `README.md`, even without a `/`.
+
+### Changed
+- Scripts and executable files open in the editor instead of being shown
+  in their folder. App bundles and installers are still only shown, and
+  with no editor every file is still only shown.
+
 ## [0.2.0] - 2026-10-14
 
 ### Added
