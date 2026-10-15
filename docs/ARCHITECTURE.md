@@ -83,7 +83,7 @@ keeps running meanwhile). It is encoded by hand
   The `match` group narrows the copied part; trailing whitespace is trimmed
   so `.+` never copies padding.
 - **`matcher`** — runs the patterns over the logical lines and returns
-  `Candidate { text, pattern, segments }` in reading order.
+  `Candidate { text, pattern, origin, segments }` in reading order; `origin` says whether a pattern or the host (link mode) found it, and only a host link gets `file://` opened.
 - **`links`** — link mode: `styled_runs`, the runs of coloured or underlined
   text a labelled link may sit under, and `file_url_path`, the local path a
   `file://` link names.

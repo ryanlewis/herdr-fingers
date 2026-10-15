@@ -3,11 +3,21 @@
 use super::patterns::PatternSet;
 use super::screen::{Screen, Segment};
 
+/// Who found a candidate, which decides how far `:open:` trusts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// A pattern matched text drawn on screen.
+    Pattern,
+    /// The host reported a link under the text; the text is its address.
+    HostLink,
+}
+
 /// Something on screen worth a hint: its copyable text and where it is drawn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
     pub text: String,
     pub pattern: String,
+    pub origin: Origin,
     /// One segment per row the copyable text touches, in reading order.
     pub segments: Vec<Segment>,
 }
@@ -19,6 +29,11 @@ impl Candidate {
 
     pub fn first_col(&self) -> u16 {
         self.segments.first().map_or(0, |s| s.col)
+    }
+
+    /// The cells the candidate covers on screen.
+    pub fn drawn_width(&self) -> usize {
+        self.segments.iter().map(|s| usize::from(s.width)).sum()
     }
 }
 
@@ -34,6 +49,7 @@ pub fn find_candidates(screen: &Screen, patterns: &PatternSet) -> Vec<Candidate>
             candidates.push(Candidate {
                 text: line.text()[found.capture_start..found.capture_end].to_string(),
                 pattern: found.pattern,
+                origin: Origin::Pattern,
                 segments,
             });
         }

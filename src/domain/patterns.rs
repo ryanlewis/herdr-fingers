@@ -136,6 +136,7 @@ impl PatternSet {
             if patterns.iter().any(|existing| existing.name == spec.name) {
                 return Err(PatternError::DuplicateName(spec.name.clone()));
             }
+
             let regex = Regex::new(&spec.regex).map_err(|error| PatternError::InvalidRegex {
                 name: spec.name.clone(),
                 reason: error.to_string(),
