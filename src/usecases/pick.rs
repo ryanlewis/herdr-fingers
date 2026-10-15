@@ -571,6 +571,17 @@ mod tests {
     }
 
     #[test]
+    fn compiler_output_opens_the_file_at_its_line() {
+        let mut world = World::new(&[Key::Hint('a', Modifier::Main)]);
+        world.host = FakeHost::showing("error: src/x.rs:12:3: oops\n").in_directory("/work");
+        world.files = FakeFiles::default().with("/work/src/x.rs", PathKind::File);
+        world.run(&editing_settings(), Some(&geometry()), None);
+        let splits = world.host.splits.borrow();
+        assert_eq!(splits[0].env[EDIT_PATH_ENV], "/work/src/x.rs");
+        assert_eq!(splits[0].env[EDIT_LINE_ENV], "12");
+    }
+
+    #[test]
     fn without_an_editor_a_file_is_revealed() {
         let mut world = World::new(&[Key::Hint('s', Modifier::Main)]);
         world.files = FakeFiles::default().with("/etc/hosts", PathKind::File);
