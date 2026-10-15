@@ -22,8 +22,9 @@ hint_position = "left"
 
 # What happens to the picked text, per key held while typing the hint.
 #   ":open:"  open it: web links in the browser, folders with the system
-#             opener, files in `editor`, Git SHAs on GitHub, and a pattern's
-#             `open_url`; programs are only shown in their folder
+#             opener, files (scripts too) in `editor`, Git SHAs on GitHub,
+#             and a pattern's `open_url`; app bundles and installers are only
+#             shown in their folder
 #   ":copy:"  copy it (see `clipboard` below)
 #   ":paste:" type it into the pane the hints came from
 #   ""        nothing
@@ -42,6 +43,12 @@ alt_action = ""
 # editor = "nvim +{line} {path}"
 # Where the editor pane opens: "right" or "down".
 editor_split = "right"
+
+# Where ":open:" looks for a relative path it cannot find near the pane (its
+# directory, that directory's Git root, folders named on the screen). The
+# path opens only when exactly one of these folders has it. Each entry starts
+# with / or ~/; a final * stands for every folder directly inside.
+search_roots = ["~/dev/*"]
 
 # Built-in patterns to look for; omit to enable them all. Known names:
 #   ip, uuid, sha, digit, url, path, hex, kubernetes, kubernetes-pod,

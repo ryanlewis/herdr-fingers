@@ -175,21 +175,37 @@ The first rule that applies wins:
    `git://`, `git@…`) are not opened.
 3. **A Git SHA** (with at least one letter; long numbers are not taken for
    SHAs): its commit page, when the pane's directory is in a Git repository
-   whose `origin` is on github.com. Otherwise the SHA is copied.
+   whose `origin` is on github.com. Failing that, the nearest
+   `github.com/<owner>/<repo>` link on the screen, or the nearest repository
+   on the screen (a folder, or a file inside it, written as an absolute or
+   `~` path) whose `origin` is on github.com. Otherwise the SHA is copied.
 4. **A path**: a trailing `:line` or `:line:col` (as in compiler and grep
    output) is kept as the line to jump to; `~` is your home directory; a
-   relative path is taken from the pane's working directory, and a diff's
-   `a/` or `b/` prefix, or a full stop at the end, is dropped when the path
-   as written does not exist.
+   diff's `a/` or `b/` prefix, or a full stop at the end, is dropped when
+   the path as written does not exist. A relative path is looked for in
+   these places, and the first that has it wins:
+   1. the pane's working directory;
+   2. the root of the Git repository that directory is in;
+   3. the folders the screen names, nearest to the picked text first (same
+      row, then the rows above, then the rows below): every absolute or `~`
+      path on screen that is a folder, and the Git repository holding any
+      absolute or `~` path on screen that exists;
+   4. the `search_roots`, but only when exactly one of them has the path.
+      When several do, nothing is opened and the status line says how many.
+
+   Then:
    - a folder opens with the system opener (Finder on macOS);
-   - a program or installer — an executable file, or a `.app`, `.command`,
-     `.terminal`, `.tool`, `.workflow`, `.action`, `.pkg`, `.mpkg`, `.dmg`,
-     `.sh`, `.prefPane`, `.saver`, `.appex`, `.qlgenerator` or `.kext`, also
-     when reached through a link — is never run: it is shown in its folder
-     instead (`open -R` on macOS, the folder on Linux);
-   - any other file opens in your editor, in a new pane beside the one
-     the hints came from.
-5. Anything else: nothing.
+   - an app bundle or installer — a `.app`, `.workflow`, `.action`, `.pkg`,
+     `.mpkg`, `.dmg`, `.prefPane`, `.saver`, `.appex`, `.qlgenerator` or
+     `.kext`, also when reached through a link — is never opened: it is
+     shown in its folder instead (`open -R` on macOS, the folder on Linux);
+   - any other file, scripts and executables included, opens in your
+     editor, in a new pane beside the one the hints came from. With no
+     editor, files are shown in their folder, never run.
+5. **Any other text that names an existing file or folder**, such as
+   `README.md` caught by a custom pattern, looked for in the same places
+   as a relative path, is opened as a path.
+6. Anything else: nothing.
 
 When nothing can be opened (a missing file, a refused link, a number), the
 hints stay up and the status line says why, so you can press another key —
@@ -207,6 +223,17 @@ editor at all, files are shown in their folder.
 ```toml
 editor = "code --wait {path}"   # {path} must be a word of its own
 editor_split = "down"
+```
+
+`search_roots` lists folders where a relative path is looked for last.
+Each entry starts with `/` or `~/`; a `*` as the last part stands for
+every folder directly inside, and no other wildcards are allowed. The
+default is `["~/dev/*"]`, so `src/main.rs` printed in a pane sitting in
+another project still opens when only one of your projects has it. Set it
+to `[]` to turn this off.
+
+```toml
+search_roots = ["~/dev/*", "~/work/*", "/srv/app"]
 ```
 
 ### Clipboard
