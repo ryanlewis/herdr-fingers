@@ -138,6 +138,11 @@ pub struct FileLocation {
 pub enum Refusal {
     Scheme(String),
     NotFound(PathBuf),
+    /// The relative path exists under more than one search root.
+    Ambiguous {
+        path: String,
+        places: usize,
+    },
     NothingToOpen,
 }
 
@@ -146,6 +151,9 @@ impl fmt::Display for Refusal {
         match self {
             Refusal::Scheme(scheme) => write!(f, "won't open {scheme} links"),
             Refusal::NotFound(path) => write!(f, "not found: {}", path.display()),
+            Refusal::Ambiguous { path, places } => {
+                write!(f, "found in {places} places; not guessing which: {path}")
+            }
             Refusal::NothingToOpen => write!(f, "nothing to open"),
         }
     }
@@ -158,7 +166,7 @@ pub enum OpenTarget {
     Url(String),
     /// A folder for the system opener.
     Directory(PathBuf),
-    /// Something that would run if opened: show it in its folder instead.
+    /// Something the system opener would run: show it in its folder instead.
     Reveal(PathBuf),
     Edit(FileLocation),
     /// A commit with no GitHub page to show: copy the SHA.
@@ -172,17 +180,14 @@ pub const SHA_PATTERN: &str = "sha";
 /// Patterns whose matches are file names even without a slash.
 const PATH_PATTERNS: &[&str] = &["path", "git-status", "diff"];
 
-/// Opening these would run something, so they are only ever revealed.
-const LAUNCHABLE_EXTENSIONS: &[&str] = &[
+/// The system opener runs or installs these, so they are only ever revealed.
+/// An editor runs nothing, so scripts are not among them.
+const RUN_BY_OPENER: &[&str] = &[
     "app",
-    "command",
-    "terminal",
-    "tool",
     "workflow",
     "pkg",
     "mpkg",
     "dmg",
-    "sh",
     "prefpane",
     "saver",
     "appex",
@@ -190,6 +195,69 @@ const LAUNCHABLE_EXTENSIONS: &[&str] = &[
     "kext",
     "action",
 ];
+
+/// Folders the system opener would hand to a program rather than show.
+const LAUNCHABLE_FOLDER_EXTENSIONS: &[&str] = &["command", "terminal", "tool", "sh"];
+
+/// Screen matches looked at for clues, nearest first; the rest are ignored.
+const MAX_SCREEN_CLUES: usize = 32;
+/// Folders from `search_roots` a relative path is looked for in.
+const MAX_SEARCH_DIRS: usize = 256;
+
+/// A folder from `search_roots` that relative paths are looked for in:
+/// `~/dev`, or `~/dev/*` for every folder directly inside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRoot {
+    dir: String,
+    each_subdirectory: bool,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum SearchRootError {
+    #[error("search_roots entries must start with / or ~/, got \"{0}\"")]
+    NotAbsolute(String),
+    #[error("search_roots entries may only have * as their last part, got \"{0}\"")]
+    Wildcard(String),
+}
+
+impl SearchRoot {
+    pub fn parse(text: &str) -> Result<Self, SearchRootError> {
+        let (dir, each_subdirectory) = match text.strip_suffix("/*") {
+            Some(dir) => (dir, true),
+            None => (text, false),
+        };
+        if dir.contains(['*', '?', '[']) {
+            return Err(SearchRootError::Wildcard(text.to_string()));
+        }
+        if !(dir.starts_with('/') || is_home_relative(dir)) {
+            return Err(SearchRootError::NotAbsolute(text.to_string()));
+        }
+        let dir = match dir.trim_end_matches('/') {
+            "" => "/",
+            trimmed => trimmed,
+        };
+        Ok(SearchRoot {
+            dir: dir.to_string(),
+            each_subdirectory,
+        })
+    }
+
+    /// `~/dev/*`.
+    pub fn default_roots() -> Vec<SearchRoot> {
+        vec![SearchRoot {
+            dir: "~/dev".to_string(),
+            each_subdirectory: true,
+        }]
+    }
+}
+
+/// Another match on the visible screen: a clue to where a relative path or
+/// a commit belongs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenMatch<'a> {
+    pub text: &'a str,
+    pub row: usize,
+}
 
 /// Everything about one picked text the resolver needs.
 pub struct OpenRequest<'a> {
@@ -199,6 +267,11 @@ pub struct OpenRequest<'a> {
     /// The source pane's working directory.
     pub cwd: Option<&'a Path>,
     pub home: Option<&'a Path>,
+    /// The screen row the picked text starts on.
+    pub row: usize,
+    /// Every match on the visible screen.
+    pub screen: &'a [ScreenMatch<'a>],
+    pub search_roots: &'a [SearchRoot],
 }
 
 /// What the resolver asks of the machine it runs on.
@@ -208,6 +281,8 @@ pub trait Surroundings {
     fn real_path(&self, path: &Path) -> PathBuf;
     /// The `origin` remote URL of the Git repository containing `dir`.
     fn git_origin(&self, dir: &Path) -> Option<String>;
+    /// The folders directly inside `dir`, sorted.
+    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf>;
 }
 
 pub fn resolve<S: Surroundings + ?Sized>(
@@ -228,19 +303,21 @@ pub fn resolve<S: Surroundings + ?Sized>(
     // The sha pattern also catches long numbers (timestamps, ids); a commit
     // that is all digits is rare enough to leave to a copy.
     if request.pattern == SHA_PATTERN && text.bytes().any(|byte| byte.is_ascii_alphabetic()) {
-        return request
-            .cwd
-            .and_then(|cwd| surroundings.git_origin(cwd))
-            .and_then(|origin| github_repository(&origin))
-            .map_or_else(
-                || OpenTarget::CopySha(text.to_string()),
-                |repository| OpenTarget::Url(format!("{repository}/commit/{text}")),
-            );
+        return commit_repository(request, surroundings).map_or_else(
+            || OpenTarget::CopySha(text.to_string()),
+            |repository| OpenTarget::Url(format!("{repository}/commit/{text}")),
+        );
     }
-    if PATH_PATTERNS.contains(&request.pattern) || text.contains('/') || text.starts_with('~') {
-        return resolve_path(request, surroundings);
+    let looks_like_a_path =
+        PATH_PATTERNS.contains(&request.pattern) || text.contains('/') || text.starts_with('~');
+    match locate(request, surroundings) {
+        Located::Found(path, kind, line) => open_found(path, kind, line, surroundings),
+        Located::Ambiguous { path, places } => {
+            OpenTarget::Refused(Refusal::Ambiguous { path, places })
+        }
+        Located::Missing(path) if looks_like_a_path => OpenTarget::Refused(Refusal::NotFound(path)),
+        Located::Missing(_) => OpenTarget::Refused(Refusal::NothingToOpen),
     }
-    OpenTarget::Refused(Refusal::NothingToOpen)
 }
 
 /// `https` in `https://…`, `git@` for SCP-style Git remotes.
@@ -274,68 +351,289 @@ pub fn github_repository(origin: &str) -> Option<String> {
         .then(|| format!("https://github.com/{owner}/{repository}"))
 }
 
-fn resolve_path<S: Surroundings + ?Sized>(
+/// The repository a web link into GitHub points at, such as
+/// `https://github.com/o/r/pull/12`.
+fn github_link_repository(link: &str) -> Option<String> {
+    let rest = link
+        .strip_prefix("https://")
+        .or_else(|| link.strip_prefix("http://"))?;
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    let rest = rest.strip_prefix("github.com/")?;
+    let rest = rest.split(['?', '#']).next().unwrap_or(rest);
+    let mut parts = rest.split('/');
+    let (owner, repository) = (parts.next()?, parts.next()?);
+    github_repository(&format!("https://github.com/{owner}/{repository}"))
+}
+
+/// The GitHub repository a commit picked from the screen belongs to: the
+/// pane's own, else the nearest one the screen names.
+fn commit_repository<S: Surroundings + ?Sized>(
     request: &OpenRequest<'_>,
+    surroundings: &S,
+) -> Option<String> {
+    let github_origin = |dir: &Path| {
+        surroundings
+            .git_origin(dir)
+            .and_then(|origin| github_repository(&origin))
+    };
+    if let Some(repository) = request.cwd.and_then(github_origin) {
+        return Some(repository);
+    }
+    let clues = nearest_clues(request, |text| {
+        is_anchored(text) || github_link_repository(text).is_some()
+    });
+    clues.into_iter().find_map(|clue| {
+        github_link_repository(clue.text).or_else(|| {
+            folders_named_by(clue.text, request.home, surroundings)
+                .iter()
+                .find_map(|dir| github_origin(dir))
+        })
+    })
+}
+
+enum Located {
+    Found(PathBuf, PathKind, Option<u32>),
+    Ambiguous {
+        path: String,
+        places: usize,
+    },
+    /// Nowhere; the path to report.
+    Missing(PathBuf),
+}
+
+/// Finds what the picked text names. A relative path is looked for in the
+/// pane's directory, its Git root, the folders the screen names (nearest
+/// first) and, when exactly one has it, the search roots.
+fn locate<S: Surroundings + ?Sized>(request: &OpenRequest<'_>, surroundings: &S) -> Located {
+    let spellings = spellings(request.text);
+    let (written, _) = spellings[0];
+    let missing =
+        || absolute(written, request.cwd, request.home).unwrap_or_else(|| PathBuf::from(written));
+    if is_anchored(written) {
+        return spellings
+            .iter()
+            .find_map(|&(written, line)| {
+                let path = absolute(written, None, request.home)?;
+                existing(path, line, surroundings)
+            })
+            .map_or_else(|| Located::Missing(missing()), found);
+    }
+    let mut tried: Vec<PathBuf> = Vec::new();
+    let mut try_in = |dir: PathBuf| {
+        if tried.contains(&dir) {
+            return None;
+        }
+        let hit = find_under(&dir, &spellings, surroundings);
+        tried.push(dir);
+        hit
+    };
+    if let Some(cwd) = request.cwd.filter(|cwd| cwd.is_absolute()) {
+        if let Some(hit) = try_in(cwd.to_path_buf()) {
+            return found(hit);
+        }
+        if let Some(hit) = git_root(cwd, surroundings).and_then(&mut try_in) {
+            return found(hit);
+        }
+    }
+    let screen_folders = nearest_clues(request, is_anchored)
+        .into_iter()
+        .flat_map(|clue| folders_named_by(clue.text, request.home, surroundings));
+    for dir in screen_folders {
+        if let Some(hit) = try_in(dir) {
+            return found(hit);
+        }
+    }
+    let mut hits: Vec<(PathBuf, PathKind, Option<u32>)> = Vec::new();
+    for dir in search_dirs(request, surroundings) {
+        if let Some(hit) = find_under(&dir, &spellings, surroundings) {
+            let real = surroundings.real_path(&hit.0);
+            if !hits
+                .iter()
+                .any(|(path, ..)| surroundings.real_path(path) == real)
+            {
+                hits.push(hit);
+            }
+        }
+    }
+    match hits.len() {
+        0 => Located::Missing(missing()),
+        1 => found(hits.remove(0)),
+        places => Located::Ambiguous {
+            path: written.to_string(),
+            places,
+        },
+    }
+}
+
+fn found((path, kind, line): (PathBuf, PathKind, Option<u32>)) -> Located {
+    Located::Found(path, kind, line)
+}
+
+/// The ways a picked path may be meant, each with its line: as written,
+/// without the `a/` or `b/` of a diff, and without a full stop that ends a
+/// sentence.
+fn spellings(text: &str) -> Vec<(&str, Option<u32>)> {
+    let mut spellings = Vec::new();
+    let without_full_stop = text.trim_end_matches('.');
+    for whole in [text, without_full_stop] {
+        if whole.is_empty() || spellings.iter().any(|&(seen, _)| seen == whole) {
+            continue;
+        }
+        let (written, line) = split_line_suffix(whole);
+        spellings.push((written, line));
+        if let Some(unprefixed) = written
+            .strip_prefix("a/")
+            .or_else(|| written.strip_prefix("b/"))
+        {
+            spellings.push((unprefixed, line));
+        }
+    }
+    if spellings.is_empty() {
+        spellings.push((text, None));
+    }
+    spellings
+}
+
+fn find_under<S: Surroundings + ?Sized>(
+    dir: &Path,
+    spellings: &[(&str, Option<u32>)],
+    surroundings: &S,
+) -> Option<(PathBuf, PathKind, Option<u32>)> {
+    spellings.iter().find_map(|&(written, line)| {
+        let path = absolute(written, Some(dir), None)?;
+        existing(path, line, surroundings)
+    })
+}
+
+fn existing<S: Surroundings + ?Sized>(
+    path: PathBuf,
+    line: Option<u32>,
+    surroundings: &S,
+) -> Option<(PathBuf, PathKind, Option<u32>)> {
+    match surroundings.kind(&path) {
+        PathKind::Missing => None,
+        kind => Some((path, kind, line)),
+    }
+}
+
+/// `/…`, `~` or `~/…`: a path that does not depend on a working directory.
+fn is_anchored(text: &str) -> bool {
+    text.starts_with('/') || is_home_relative(text)
+}
+
+fn is_home_relative(text: &str) -> bool {
+    text == "~" || text.starts_with("~/")
+}
+
+/// The screen matches `relevant` keeps, nearest to the picked text first:
+/// the same row, then the rows above, then the rows below.
+fn nearest_clues<'a>(
+    request: &OpenRequest<'a>,
+    relevant: impl Fn(&str) -> bool,
+) -> Vec<ScreenMatch<'a>> {
+    let distance = |row: usize| {
+        if row == request.row {
+            (0, 0)
+        } else if row < request.row {
+            (1, request.row - row)
+        } else {
+            (2, row - request.row)
+        }
+    };
+    let mut clues: Vec<ScreenMatch<'a>> = request
+        .screen
+        .iter()
+        .copied()
+        .filter(|clue| relevant(clue.text))
+        .collect();
+    clues.sort_by_key(|clue| distance(clue.row));
+    clues.truncate(MAX_SCREEN_CLUES);
+    clues
+}
+
+/// The folders an absolute or `~` path on screen points at: the path itself
+/// when it is a folder, and the Git root of whatever it names.
+fn folders_named_by<S: Surroundings + ?Sized>(
+    text: &str,
+    home: Option<&Path>,
+    surroundings: &S,
+) -> Vec<PathBuf> {
+    let Some((path, kind, _)) = spellings(text).iter().find_map(|&(written, line)| {
+        let path = absolute(written, None, home)?;
+        existing(path, line, surroundings)
+    }) else {
+        return Vec::new();
+    };
+    let folder = if kind == PathKind::Directory {
+        Some(path.as_path())
+    } else {
+        path.parent()
+    };
+    let mut folders = Vec::new();
+    if kind == PathKind::Directory {
+        folders.push(path.clone());
+    }
+    if let Some(root) = folder.and_then(|folder| git_root(folder, surroundings))
+        && !folders.contains(&root)
+    {
+        folders.push(root);
+    }
+    folders
+}
+
+/// The nearest folder at or above `dir` holding a `.git`.
+fn git_root<S: Surroundings + ?Sized>(dir: &Path, surroundings: &S) -> Option<PathBuf> {
+    dir.ancestors()
+        .find(|folder| surroundings.kind(&folder.join(".git")) != PathKind::Missing)
+        .map(Path::to_path_buf)
+}
+
+fn search_dirs<S: Surroundings + ?Sized>(
+    request: &OpenRequest<'_>,
+    surroundings: &S,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for root in request.search_roots {
+        let Some(base) = absolute(&root.dir, None, request.home) else {
+            continue;
+        };
+        if root.each_subdirectory {
+            dirs.extend(surroundings.subdirectories(&base));
+        } else {
+            dirs.push(base);
+        }
+        if dirs.len() >= MAX_SEARCH_DIRS {
+            break;
+        }
+    }
+    dirs.truncate(MAX_SEARCH_DIRS);
+    dirs
+}
+
+fn open_found<S: Surroundings + ?Sized>(
+    path: PathBuf,
+    kind: PathKind,
+    line: Option<u32>,
     surroundings: &S,
 ) -> OpenTarget {
-    // A path that ends a sentence is matched with its full stop.
-    let without_full_stop = request.text.trim_end_matches('.');
-    let located = locate(request.text, request, surroundings).or_else(|missing| {
-        if without_full_stop.is_empty() || without_full_stop == request.text {
-            return Err(missing);
-        }
-        locate(without_full_stop, request, surroundings).map_err(|_| missing)
-    });
-    let (path, kind, line) = match located {
-        Ok(found) => found,
-        Err(missing) => return OpenTarget::Refused(Refusal::NotFound(missing)),
-    };
     // The opener follows links, so a link named `docs` to an app bundle
     // would launch it: what the path leads to counts too.
-    let launchable = is_launchable(&path) || is_launchable(&surroundings.real_path(&path));
+    let real = surroundings.real_path(&path);
+    let either =
+        |extensions: &[&str]| has_extension(&path, extensions) || has_extension(&real, extensions);
     match kind {
         PathKind::Missing => OpenTarget::Refused(Refusal::NotFound(path)),
-        PathKind::Executable => OpenTarget::Reveal(path),
-        _ if launchable => OpenTarget::Reveal(path),
+        _ if either(RUN_BY_OPENER) => OpenTarget::Reveal(path),
+        PathKind::Directory if either(LAUNCHABLE_FOLDER_EXTENSIONS) => OpenTarget::Reveal(path),
         PathKind::Directory => OpenTarget::Directory(path),
-        PathKind::File => OpenTarget::Edit(FileLocation { path, line }),
+        PathKind::File | PathKind::Executable => OpenTarget::Edit(FileLocation { path, line }),
     }
 }
 
-/// The existing path `text` names, its kind and line; or, when there is
-/// none, the path to report as not found.
-fn locate<S: Surroundings + ?Sized>(
-    text: &str,
-    request: &OpenRequest<'_>,
-    surroundings: &S,
-) -> Result<(PathBuf, PathKind, Option<u32>), PathBuf> {
-    let (written, line) = split_line_suffix(text);
-    let Some(path) = absolute(written, request.cwd, request.home) else {
-        return Err(PathBuf::from(written));
-    };
-    let kind = surroundings.kind(&path);
-    if kind != PathKind::Missing {
-        return Ok((path, kind, line));
-    }
-    let unprefixed = written
-        .strip_prefix("a/")
-        .or_else(|| written.strip_prefix("b/"))
-        .and_then(|unprefixed| absolute(unprefixed, request.cwd, request.home));
-    if let Some(retry) = unprefixed {
-        let kind = surroundings.kind(&retry);
-        if kind != PathKind::Missing {
-            return Ok((retry, kind, line));
-        }
-    }
-    Err(path)
-}
-
-fn is_launchable(path: &Path) -> bool {
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            LAUNCHABLE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-        })
+        .is_some_and(|extension| extensions.contains(&extension.to_ascii_lowercase().as_str()))
 }
 
 /// `src/x.rs:12:3` is `src/x.rs` at line 12; the column is dropped.
@@ -383,7 +681,7 @@ mod tests {
     struct Machine {
         kinds: BTreeMap<PathBuf, PathKind>,
         links: BTreeMap<PathBuf, PathBuf>,
-        origin: Option<String>,
+        origins: BTreeMap<PathBuf, String>,
     }
 
     impl Machine {
@@ -397,9 +695,19 @@ mod tests {
             self
         }
 
-        fn with_origin(mut self, origin: &str) -> Self {
-            self.origin = Some(origin.to_string());
+        fn with_origin(self, origin: &str) -> Self {
+            self.with_origin_at("/work/repo", origin)
+        }
+
+        fn with_origin_at(mut self, repository: &str, origin: &str) -> Self {
+            self.origins
+                .insert(PathBuf::from(repository), origin.to_string());
             self
+        }
+
+        fn with_repository(self, root: &str) -> Self {
+            self.with(root, PathKind::Directory)
+                .with(&format!("{root}/.git"), PathKind::Directory)
         }
     }
 
@@ -415,22 +723,83 @@ mod tests {
                 .unwrap_or_else(|| path.to_path_buf())
         }
 
-        fn git_origin(&self, _dir: &Path) -> Option<String> {
-            self.origin.clone()
+        fn git_origin(&self, dir: &Path) -> Option<String> {
+            dir.ancestors()
+                .find_map(|folder| self.origins.get(folder).cloned())
+        }
+
+        fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
+            self.kinds
+                .iter()
+                .filter(|(path, kind)| **kind == PathKind::Directory && path.parent() == Some(dir))
+                .map(|(path, _)| path.clone())
+                .collect()
+        }
+    }
+
+    struct Ask<'a> {
+        text: &'a str,
+        pattern: &'a str,
+        cwd: &'a str,
+        row: usize,
+        screen: Vec<ScreenMatch<'a>>,
+        search_roots: Vec<SearchRoot>,
+    }
+
+    impl<'a> Ask<'a> {
+        fn new(text: &'a str, pattern: &'a str) -> Self {
+            Ask {
+                text,
+                pattern,
+                cwd: "/work/repo",
+                row: 0,
+                screen: Vec::new(),
+                search_roots: Vec::new(),
+            }
+        }
+
+        fn from(mut self, cwd: &'a str) -> Self {
+            self.cwd = cwd;
+            self
+        }
+
+        fn at_row(mut self, row: usize) -> Self {
+            self.row = row;
+            self
+        }
+
+        fn beside(mut self, text: &'a str, row: usize) -> Self {
+            self.screen.push(ScreenMatch { text, row });
+            self
+        }
+
+        fn searching(mut self, roots: &[&str]) -> Self {
+            self.search_roots = roots
+                .iter()
+                .map(|root| SearchRoot::parse(root).unwrap())
+                .collect();
+            self
+        }
+
+        fn resolve(&self, machine: &Machine) -> OpenTarget {
+            resolve(
+                &OpenRequest {
+                    text: self.text,
+                    pattern: self.pattern,
+                    url_template: None,
+                    cwd: Some(Path::new(self.cwd)),
+                    home: Some(Path::new("/home/me")),
+                    row: self.row,
+                    screen: &self.screen,
+                    search_roots: &self.search_roots,
+                },
+                machine,
+            )
         }
     }
 
     fn open(text: &str, pattern: &str, machine: &Machine) -> OpenTarget {
-        resolve(
-            &OpenRequest {
-                text,
-                pattern,
-                url_template: None,
-                cwd: Some(Path::new("/work/repo")),
-                home: Some(Path::new("/home/me")),
-            },
-            machine,
-        )
+        Ask::new(text, pattern).resolve(machine)
     }
 
     fn edit(path: &str, line: Option<u32>) -> OpenTarget {
@@ -449,6 +818,9 @@ mod tests {
             url_template: Some(&template),
             cwd: None,
             home: None,
+            row: 0,
+            screen: &[],
+            search_roots: &[],
         };
         assert_eq!(
             resolve(&request, &Machine::default()),
@@ -633,6 +1005,9 @@ mod tests {
             url_template: None,
             cwd: None,
             home: None,
+            row: 0,
+            screen: &[],
+            search_roots: &[],
         };
         assert_eq!(
             resolve(&request, &Machine::default()),
@@ -641,45 +1016,299 @@ mod tests {
     }
 
     #[test]
-    fn executables_and_app_bundles_are_revealed_never_launched() {
+    fn scripts_and_executables_open_in_the_editor_since_it_runs_nothing() {
         let machine = Machine::default()
             .with("/work/repo/run", PathKind::Executable)
-            .with("/work/repo/Calc.app", PathKind::Directory)
             .with("/work/repo/setup.sh", PathKind::File)
-            .with("/work/repo/Installer.PKG", PathKind::File)
-            .with("/work/repo/Driver.mpkg", PathKind::Directory)
-            .with("/work/repo/Foo.prefPane", PathKind::Directory)
-            .with("/work/repo/src", PathKind::Directory);
-        for bundle in ["Driver.mpkg", "Foo.prefPane"] {
+            .with("/work/repo/build.command", PathKind::Executable)
+            .with("/work/repo/x.tool", PathKind::File);
+        for name in ["run", "setup.sh", "build.command", "x.tool"] {
             assert_eq!(
-                open(&format!("./{bundle}"), "path", &machine),
-                OpenTarget::Reveal(format!("/work/repo/{bundle}").into())
+                open(&format!("./{name}"), "path", &machine),
+                edit(&format!("/work/repo/{name}"), None),
+                "{name}"
             );
         }
         assert_eq!(
-            open("./run", "path", &machine),
-            OpenTarget::Reveal("/work/repo/run".into())
+            open("/work/repo/run:3", "path", &machine),
+            edit("/work/repo/run", Some(3))
         );
-        assert_eq!(
-            open("/work/repo/run", "path", &machine),
-            OpenTarget::Reveal("/work/repo/run".into())
-        );
-        assert_eq!(
-            open("./Calc.app", "path", &machine),
-            OpenTarget::Reveal("/work/repo/Calc.app".into())
-        );
-        assert_eq!(
-            open("./setup.sh", "path", &machine),
-            OpenTarget::Reveal("/work/repo/setup.sh".into())
-        );
-        assert_eq!(
-            open("./Installer.PKG", "path", &machine),
-            OpenTarget::Reveal("/work/repo/Installer.PKG".into())
-        );
+    }
+
+    #[test]
+    fn bundles_and_installers_are_revealed_never_launched() {
+        let machine = Machine::default()
+            .with("/work/repo/Calc.app", PathKind::Directory)
+            .with("/work/repo/Installer.PKG", PathKind::File)
+            .with("/work/repo/Disk.dmg", PathKind::File)
+            .with("/work/repo/Driver.mpkg", PathKind::Directory)
+            .with("/work/repo/Foo.prefPane", PathKind::Directory)
+            .with("/work/repo/Run.workflow", PathKind::Directory)
+            .with("/work/repo/odd.command", PathKind::Directory)
+            .with("/work/repo/src", PathKind::Directory);
+        for name in [
+            "Calc.app",
+            "Installer.PKG",
+            "Disk.dmg",
+            "Driver.mpkg",
+            "Foo.prefPane",
+            "Run.workflow",
+            "odd.command",
+        ] {
+            assert_eq!(
+                open(&format!("./{name}"), "path", &machine),
+                OpenTarget::Reveal(format!("/work/repo/{name}").into()),
+                "{name}"
+            );
+        }
         assert_eq!(
             open("./src", "path", &machine),
             OpenTarget::Directory("/work/repo/src".into())
         );
+    }
+
+    #[test]
+    fn a_file_linking_to_an_installer_is_revealed() {
+        let machine = Machine::default()
+            .with("/work/repo/notes.txt", PathKind::File)
+            .linking("/work/repo/notes.txt", "/tmp/Setup.pkg");
+        assert_eq!(
+            open("notes.txt", "path", &machine),
+            OpenTarget::Reveal("/work/repo/notes.txt".into())
+        );
+    }
+
+    #[test]
+    fn a_relative_path_is_found_in_the_working_directory_first() {
+        let machine = Machine::default()
+            .with_repository("/work/repo")
+            .with("/work/repo/sub/src/x.rs", PathKind::File)
+            .with("/work/repo/src/x.rs", PathKind::File)
+            .with_repository("/elsewhere")
+            .with("/elsewhere/src/x.rs", PathKind::File);
+        let ask = Ask::new("src/x.rs", "path")
+            .from("/work/repo/sub")
+            .beside("/elsewhere", 0);
+        assert_eq!(ask.resolve(&machine), edit("/work/repo/sub/src/x.rs", None));
+    }
+
+    #[test]
+    fn a_relative_path_is_found_at_the_git_root_of_the_working_directory() {
+        let machine = Machine::default()
+            .with_repository("/work/repo")
+            .with("/work/repo/src/x.rs", PathKind::File)
+            .with("/work/repo/sub", PathKind::Directory);
+        assert_eq!(
+            Ask::new("src/x.rs:9", "path")
+                .from("/work/repo/sub")
+                .resolve(&machine),
+            edit("/work/repo/src/x.rs", Some(9))
+        );
+    }
+
+    #[test]
+    fn a_relative_path_is_found_in_the_nearest_folder_the_screen_names() {
+        let machine = Machine::default()
+            .with("/a", PathKind::Directory)
+            .with("/a/src/x.rs", PathKind::File)
+            .with("/b", PathKind::Directory)
+            .with("/b/src/x.rs", PathKind::File)
+            .with("/c", PathKind::Directory)
+            .with("/c/src/x.rs", PathKind::File);
+        let ask = |rows: [usize; 3]| {
+            Ask::new("src/x.rs", "path")
+                .from("/nowhere")
+                .at_row(5)
+                .beside("/a", rows[0])
+                .beside("/b", rows[1])
+                .beside("/c", rows[2])
+                .resolve(&machine)
+        };
+        assert_eq!(ask([1, 5, 9]), edit("/b/src/x.rs", None), "same row");
+        assert_eq!(ask([1, 3, 6]), edit("/b/src/x.rs", None), "rows above");
+        assert_eq!(ask([9, 7, 6]), edit("/c/src/x.rs", None), "rows below");
+    }
+
+    #[test]
+    fn a_file_on_screen_lends_its_git_root() {
+        let machine = Machine::default()
+            .with_repository("/home/me/dev/fingers")
+            .with("/home/me/dev/fingers/README.md", PathKind::File)
+            .with("/home/me/dev/fingers/src/domain/open.rs", PathKind::File);
+        assert_eq!(
+            Ask::new("src/domain/open.rs", "path")
+                .from("/home/me/dev/notes")
+                .beside("~/dev/fingers/README.md:4", 0)
+                .resolve(&machine),
+            edit("/home/me/dev/fingers/src/domain/open.rs", None)
+        );
+    }
+
+    #[test]
+    fn a_relative_path_in_exactly_one_search_root_is_found() {
+        let machine = Machine::default()
+            .with("/home/me/dev", PathKind::Directory)
+            .with("/home/me/dev/notes", PathKind::Directory)
+            .with("/home/me/dev/fingers", PathKind::Directory)
+            .with("/home/me/dev/fingers/src/domain/open.rs", PathKind::File);
+        assert_eq!(
+            Ask::new("src/domain/open.rs", "path")
+                .from("/home/me/dev/notes")
+                .searching(&["~/dev/*"])
+                .resolve(&machine),
+            edit("/home/me/dev/fingers/src/domain/open.rs", None)
+        );
+    }
+
+    #[test]
+    fn a_relative_path_in_several_search_roots_is_refused() {
+        let machine = Machine::default()
+            .with("/home/me/dev/a/src/lib.rs", PathKind::File)
+            .with("/home/me/dev/b/src/lib.rs", PathKind::File)
+            .with("/home/me/dev/c/src/lib.rs", PathKind::File)
+            .with("/home/me/dev/a", PathKind::Directory)
+            .with("/home/me/dev/b", PathKind::Directory)
+            .with("/home/me/dev/c", PathKind::Directory)
+            .with("/srv/one/src/lib.rs", PathKind::File);
+        let refusal = Ask::new("src/lib.rs", "path")
+            .from("/nowhere")
+            .searching(&["~/dev/*", "/srv/one"])
+            .resolve(&machine);
+        assert_eq!(
+            refusal,
+            OpenTarget::Refused(Refusal::Ambiguous {
+                path: "src/lib.rs".into(),
+                places: 4
+            })
+        );
+        let OpenTarget::Refused(refusal) = refusal else {
+            unreachable!()
+        };
+        assert_eq!(
+            refusal.to_string(),
+            "found in 4 places; not guessing which: src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn a_relative_path_found_nowhere_is_reported_against_the_working_directory() {
+        let machine = Machine::default()
+            .with("/home/me/dev/a", PathKind::Directory)
+            .with("/x", PathKind::Directory);
+        assert_eq!(
+            Ask::new("src/gone.rs", "path")
+                .beside("/x", 0)
+                .searching(&["~/dev/*"])
+                .resolve(&machine),
+            OpenTarget::Refused(Refusal::NotFound("/work/repo/src/gone.rs".into()))
+        );
+    }
+
+    #[test]
+    fn a_folder_on_screen_never_changes_what_kind_of_action_runs() {
+        let machine = Machine::default()
+            .with("/evil", PathKind::Directory)
+            .with("/evil/docs", PathKind::Directory)
+            .linking("/evil/docs", "/Applications/Calc.app");
+        assert_eq!(
+            Ask::new("docs", "path")
+                .beside("/evil", 0)
+                .resolve(&machine),
+            OpenTarget::Reveal("/evil/docs".into())
+        );
+    }
+
+    #[test]
+    fn a_bare_file_name_opens_when_it_exists() {
+        let machine = Machine::default()
+            .with("/work/repo/README.md", PathKind::File)
+            .with("/work/repo/src", PathKind::Directory);
+        assert_eq!(
+            open("README.md", "custom", &machine),
+            edit("/work/repo/README.md", None)
+        );
+        assert_eq!(
+            open("src", "custom", &machine),
+            OpenTarget::Directory("/work/repo/src".into())
+        );
+        assert_eq!(
+            open("CHANGELOG.md", "custom", &machine),
+            OpenTarget::Refused(Refusal::NothingToOpen)
+        );
+    }
+
+    #[test]
+    fn a_bare_file_name_is_searched_for_like_any_relative_path() {
+        let machine = Machine::default()
+            .with("/home/me/dev/fingers", PathKind::Directory)
+            .with("/home/me/dev/fingers/Cargo.toml", PathKind::File);
+        assert_eq!(
+            Ask::new("Cargo.toml", "custom")
+                .from("/nowhere")
+                .searching(&["~/dev/*"])
+                .resolve(&machine),
+            edit("/home/me/dev/fingers/Cargo.toml", None)
+        );
+    }
+
+    #[test]
+    fn a_sha_outside_a_github_repository_opens_the_nearest_github_link_on_screen() {
+        let machine = Machine::default();
+        assert_eq!(
+            Ask::new("8b1a995", SHA_PATTERN)
+                .at_row(4)
+                .beside("https://github.com/far/away", 0)
+                .beside("https://example.com/x/y", 4)
+                .beside("https://github.com/o/r/pull/12?x=1", 3)
+                .resolve(&machine),
+            OpenTarget::Url("https://github.com/o/r/commit/8b1a995".into())
+        );
+    }
+
+    #[test]
+    fn a_sha_outside_a_github_repository_uses_a_repository_named_on_screen() {
+        let machine = Machine::default()
+            .with_repository("/home/me/dev/fingers")
+            .with("/home/me/dev/fingers/src", PathKind::Directory)
+            .with_origin_at("/home/me/dev/fingers", "git@github.com:me/fingers.git");
+        assert_eq!(
+            Ask::new("8b1a995", SHA_PATTERN)
+                .from("/home/me/dev/notes")
+                .beside("~/dev/fingers/src", 1)
+                .resolve(&machine),
+            OpenTarget::Url("https://github.com/me/fingers/commit/8b1a995".into())
+        );
+    }
+
+    #[test]
+    fn the_pane_repository_wins_over_the_screen_for_a_sha() {
+        let machine = Machine::default().with_origin("git@github.com:o/r.git");
+        assert_eq!(
+            Ask::new("8b1a995", SHA_PATTERN)
+                .beside("https://github.com/x/y", 0)
+                .resolve(&machine),
+            OpenTarget::Url("https://github.com/o/r/commit/8b1a995".into())
+        );
+    }
+
+    #[test]
+    fn search_roots_are_absolute_with_at_most_a_final_star() {
+        assert!(SearchRoot::parse("~/dev/*").is_ok());
+        assert!(SearchRoot::parse("/srv/code/").is_ok());
+        assert_eq!(
+            SearchRoot::default_roots(),
+            vec![SearchRoot::parse("~/dev/*").unwrap()]
+        );
+        for wild in ["~/dev/**", "~/*/src", "/srv/pro?", "~/dev/x*", "*"] {
+            assert!(
+                matches!(SearchRoot::parse(wild), Err(SearchRootError::Wildcard(_))),
+                "{wild}"
+            );
+        }
+        assert!(matches!(
+            SearchRoot::parse("dev/*"),
+            Err(SearchRootError::NotAbsolute(_))
+        ));
     }
 
     #[test]
