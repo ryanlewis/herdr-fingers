@@ -6,7 +6,9 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::domain::alphabet::{Alphabet, AlphabetError};
-use crate::domain::open::{EditorCommand, EditorError, UrlTemplate, UrlTemplateError};
+use crate::domain::open::{
+    EditorCommand, EditorError, SearchRoot, SearchRootError, UrlTemplate, UrlTemplateError,
+};
 use crate::domain::patterns::{self, PatternError, PatternSet, PatternSpec};
 use crate::domain::settings::{
     Action, Actions, ClipboardMode, HintPosition, Settings, SplitDirection, Theme,
@@ -42,6 +44,8 @@ pub enum ConfigError {
     },
     #[error(transparent)]
     Editor(#[from] EditorError),
+    #[error(transparent)]
+    SearchRoot(#[from] SearchRootError),
     #[error("{0}")]
     Invalid(String),
 }
@@ -68,6 +72,7 @@ struct FileConfig {
     multi_separator: Option<String>,
     editor: Option<String>,
     editor_split: Option<String>,
+    search_roots: Option<Vec<String>>,
     #[serde(default)]
     style: StyleConfig,
 }
@@ -216,6 +221,13 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         }
     };
     let editor = file.editor.as_deref().map(editor_command).transpose()?;
+    let search_roots = match &file.search_roots {
+        Some(roots) => roots
+            .iter()
+            .map(|root| SearchRoot::parse(root.trim()))
+            .collect::<Result<Vec<_>, _>>()?,
+        None => defaults.search_roots,
+    };
 
     let default_theme = Theme::default();
     let style =
@@ -269,6 +281,7 @@ pub fn parse(text: &str) -> Result<Settings, ConfigError> {
         multi_separator: file.multi_separator.unwrap_or(defaults.multi_separator),
         editor,
         editor_split,
+        search_roots,
     })
 }
 
@@ -308,6 +321,28 @@ mod tests {
         assert_eq!(parsed.multi_separator, defaults.multi_separator);
         assert_eq!(parsed.editor, defaults.editor);
         assert_eq!(parsed.editor_split, defaults.editor_split);
+        assert_eq!(parsed.search_roots, defaults.search_roots);
+    }
+
+    #[test]
+    fn search_roots_are_read_and_checked() {
+        let parsed = parse("search_roots = [\"~/code/*\", \"/srv/repo\"]").unwrap();
+        assert_eq!(
+            parsed.search_roots,
+            vec![
+                SearchRoot::parse("~/code/*").unwrap(),
+                SearchRoot::parse("/srv/repo").unwrap()
+            ]
+        );
+        assert!(parse("search_roots = []").unwrap().search_roots.is_empty());
+        assert!(matches!(
+            parse("search_roots = [\"~/**\"]"),
+            Err(ConfigError::SearchRoot(SearchRootError::Wildcard(_)))
+        ));
+        assert!(matches!(
+            parse("search_roots = [\"dev\"]"),
+            Err(ConfigError::SearchRoot(SearchRootError::NotAbsolute(_)))
+        ));
     }
 
     #[test]

@@ -169,6 +169,23 @@ impl Surroundings for SystemFiles {
         let url = String::from_utf8(output.stdout).ok()?;
         Some(url.trim().to_string()).filter(|url| !url.is_empty())
     }
+
+    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
+        // Enough for any folder of projects; a huge folder is cut short
+        // rather than read whole on every pick.
+        const MAX_ENTRIES: usize = 1000;
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut folders: Vec<PathBuf> = entries
+            .take(MAX_ENTRIES)
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        folders.sort();
+        folders
+    }
 }
 
 impl FileSystem for SystemFiles {
@@ -268,6 +285,20 @@ mod tests {
         assert_eq!(SystemFiles.kind(&plain), PathKind::File);
         assert_eq!(SystemFiles.kind(&script), PathKind::Executable);
         assert_eq!(SystemFiles.kind(&dir.join("gone")), PathKind::Missing);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn subdirectories_are_the_folders_directly_inside_sorted() {
+        let dir = temp_dir("subdirectories");
+        std::fs::create_dir_all(dir.join("b/deep")).unwrap();
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::write(dir.join("file"), "x").unwrap();
+        assert_eq!(
+            SystemFiles.subdirectories(&dir),
+            vec![dir.join("a"), dir.join("b")]
+        );
+        assert!(SystemFiles.subdirectories(&dir.join("gone")).is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

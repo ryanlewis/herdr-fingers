@@ -2,7 +2,7 @@
 //! raw config file.
 
 use super::alphabet::Alphabet;
-use super::open::EditorCommand;
+use super::open::{EditorCommand, SearchRoot};
 use super::patterns::PatternSet;
 use super::session::Modifier;
 use super::style::{Color, TextStyle};
@@ -156,6 +156,8 @@ pub struct Settings {
     /// The editor `:open:` runs on files; `None` reveals them instead.
     pub editor: Option<EditorCommand>,
     pub editor_split: SplitDirection,
+    /// Where a relative path not found near the pane is looked for.
+    pub search_roots: Vec<SearchRoot>,
 }
 
 impl Default for Settings {
@@ -173,6 +175,7 @@ impl Default for Settings {
             multi_separator: " ".to_string(),
             editor: None,
             editor_split: SplitDirection::default(),
+            search_roots: SearchRoot::default_roots(),
         }
     }
 }

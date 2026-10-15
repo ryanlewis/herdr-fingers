@@ -10,7 +10,7 @@ use super::ports::{
 };
 use crate::domain::geometry::OverlayGeometry;
 use crate::domain::matcher::find_candidates;
-use crate::domain::open::{self, FileLocation, OpenRequest, OpenTarget};
+use crate::domain::open::{self, FileLocation, OpenRequest, OpenTarget, ScreenMatch};
 use crate::domain::screen::Screen;
 use crate::domain::session::{Outcome, Selection, Session};
 use crate::domain::settings::{Action, Settings};
@@ -74,6 +74,15 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
     };
     let screen = Screen::from_ansi(&deps.host.read_visible(request.pane_id)?, width);
     let candidates = find_candidates(&screen, &request.settings.patterns);
+    let on_screen: Vec<ScreenMatch> = candidates
+        .iter()
+        .filter_map(|candidate| {
+            candidate.segments.first().map(|segment| ScreenMatch {
+                text: &candidate.text,
+                row: segment.row,
+            })
+        })
+        .collect();
     let fresh_session = || Session::new(candidates.clone(), &request.settings.alphabet);
     let mut session = fresh_session();
     let mut notice = request.notice.map(str::to_string);
@@ -89,7 +98,11 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
         match deps.picker.pick(&view, &mut session)? {
             Outcome::Picked(selection) => {
                 let cwd = deps.host.pane_cwd(request.pane_id).unwrap_or(None);
-                match dispatch(&selection, request, cwd.as_deref(), deps)? {
+                let context = Context {
+                    cwd: cwd.as_deref(),
+                    on_screen: &on_screen,
+                };
+                match dispatch(&selection, request, &context, deps)? {
                     Dispatched::Done(message) => return Ok(Picked::Done(message)),
                     // Nothing happened: keep the hints up and say why, and
                     // start over so another key (Ctrl to copy, say) acts on
@@ -112,14 +125,21 @@ enum Dispatched {
     Refused(String),
 }
 
+/// Where the pick was made: the pane's directory and the rest of its screen.
+struct Context<'a> {
+    cwd: Option<&'a Path>,
+    on_screen: &'a [ScreenMatch<'a>],
+}
+
 /// Carries out the action bound to the modifier the user held.
 fn dispatch(
     selection: &Selection,
     request: &PickRequest<'_>,
-    cwd: Option<&Path>,
+    context: &Context<'_>,
     deps: &mut Deps<'_>,
 ) -> Result<Dispatched, PickError> {
     let settings = request.settings;
+    let cwd = context.cwd;
     let text = selection.texts().join(&settings.multi_separator);
     match settings.actions.for_modifier(selection.modifier) {
         Action::Copy => {
@@ -150,7 +170,7 @@ fn dispatch(
             deps.launcher.run(command_line, &text, &env, cwd)?;
             Ok(Dispatched::Done(format!("ran {command_line}")))
         }
-        Action::Open => open_all(selection, &text, request, cwd, deps),
+        Action::Open => open_all(selection, &text, request, context, deps),
         Action::Nothing => Ok(Dispatched::Done(String::new())),
     }
 }
@@ -171,9 +191,10 @@ fn open_all(
     selection: &Selection,
     text: &str,
     request: &PickRequest<'_>,
-    cwd: Option<&Path>,
+    context: &Context<'_>,
     deps: &mut Deps<'_>,
 ) -> Result<Dispatched, PickError> {
+    let cwd = context.cwd;
     let home = deps.files.home_dir();
     let targets: Vec<OpenTarget> = selection
         .picks
@@ -185,6 +206,9 @@ fn open_all(
                 url_template: request.settings.patterns.open_url(&pick.pattern),
                 cwd,
                 home: home.as_deref(),
+                row: pick.row,
+                screen: context.on_screen,
+                search_roots: &request.settings.search_roots,
             };
             open::resolve(&request, deps.files)
         })
@@ -599,15 +623,38 @@ mod tests {
     }
 
     #[test]
-    fn an_executable_is_revealed_even_with_an_editor() {
+    fn an_executable_opens_in_the_editor_and_is_revealed_without_one() {
         let mut world = World::new(&[Key::Hint('s', Modifier::Main)]);
         world.files = FakeFiles::default().with("/etc/hosts", PathKind::Executable);
         world.run(&editing_settings(), Some(&geometry()), None);
+        assert_eq!(
+            world.host.splits.borrow()[0].env[EDIT_PATH_ENV],
+            "/etc/hosts"
+        );
+        assert!(world.launcher.revealed.borrow().is_empty());
+
+        let mut world = World::new(&[Key::Hint('s', Modifier::Main)]);
+        world.files = FakeFiles::default().with("/etc/hosts", PathKind::Executable);
+        world.run(&settings(), Some(&geometry()), None);
         assert_eq!(
             *world.launcher.revealed.borrow(),
             vec![PathBuf::from("/etc/hosts")]
         );
         assert!(world.host.splits.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_relative_path_is_found_in_a_folder_named_on_the_screen() {
+        let mut world = World::new(&[Key::Hint('a', Modifier::Main)]);
+        world.host = FakeHost::showing("cd /code/fingers\nsee src/lib.rs\n").in_directory("/notes");
+        world.files = FakeFiles::default()
+            .with("/code/fingers", PathKind::Directory)
+            .with("/code/fingers/src/lib.rs", PathKind::File);
+        world.run(&editing_settings(), Some(&geometry()), None);
+        assert_eq!(
+            world.host.splits.borrow()[0].env[EDIT_PATH_ENV],
+            "/code/fingers/src/lib.rs"
+        );
     }
 
     #[test]

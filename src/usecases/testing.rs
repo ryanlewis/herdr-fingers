@@ -253,6 +253,14 @@ impl Surroundings for FakeFiles {
     fn git_origin(&self, _dir: &Path) -> Option<String> {
         self.origin.clone()
     }
+
+    fn subdirectories(&self, dir: &Path) -> Vec<PathBuf> {
+        self.kinds
+            .iter()
+            .filter(|(path, kind)| **kind == PathKind::Directory && path.parent() == Some(dir))
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
 }
 
 impl FileSystem for FakeFiles {
