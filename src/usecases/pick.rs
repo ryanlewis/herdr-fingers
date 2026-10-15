@@ -9,7 +9,8 @@ use super::ports::{
     Clipboard, FileSystem, Launcher, PaneHost, PickView, Picker, PortError, SplitPane,
 };
 use crate::domain::geometry::OverlayGeometry;
-use crate::domain::matcher::find_candidates;
+use crate::domain::links::{self, LINK_PATTERN};
+use crate::domain::matcher::{Candidate, find_candidates};
 use crate::domain::open::{self, FileLocation, OpenRequest, OpenTarget, ScreenMatch};
 use crate::domain::screen::Screen;
 use crate::domain::session::{Outcome, Selection, Session};
@@ -23,6 +24,19 @@ pub const EDITOR_ENV: &str = "HERDR_FINGERS_EDITOR";
 pub const EDIT_PATH_ENV: &str = "HERDR_FINGERS_EDIT_PATH";
 pub const EDIT_LINE_ENV: &str = "HERDR_FINGERS_EDIT_LINE";
 
+/// Where the overlay's hints come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintSource {
+    /// Matches of the configured patterns.
+    Patterns,
+    /// Links the host reports under coloured or underlined text.
+    Links,
+}
+
+/// Link lookups per overlay. Each may run a host link handler, and a busy
+/// screen has hundreds of coloured runs.
+pub const MAX_LINK_LOOKUPS: usize = 64;
+
 /// What one run of the overlay works on.
 pub struct PickRequest<'a> {
     /// This plugin's id, to open its editor pane.
@@ -31,6 +45,7 @@ pub struct PickRequest<'a> {
     /// Where the pane sits in the overlay; `None` when launched by hand.
     pub geometry: Option<&'a OverlayGeometry>,
     pub settings: &'a Settings,
+    pub source: HintSource,
     /// A one-line notice to show (for instance a configuration problem).
     pub notice: Option<&'a str>,
 }
@@ -73,7 +88,22 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
             .map_or(0, |p| p.rect.width),
     };
     let screen = Screen::from_ansi(&deps.host.read_visible(request.pane_id)?, width);
-    let candidates = find_candidates(&screen, &request.settings.patterns);
+    let (candidates, source_notice) = match request.source {
+        HintSource::Patterns => (find_candidates(&screen, &request.settings.patterns), None),
+        HintSource::Links => match find_links(&screen, request.pane_id, deps.host) {
+            Ok(found) if !found.is_empty() => (found, None),
+            Ok(_) => (
+                find_candidates(&screen, &request.settings.patterns),
+                Some("no links found; showing the usual hints".to_string()),
+            ),
+            Err(error) => (
+                find_candidates(&screen, &request.settings.patterns),
+                Some(format!(
+                    "can't look up links ({error}); showing the usual hints"
+                )),
+            ),
+        },
+    };
     let on_screen: Vec<ScreenMatch> = candidates
         .iter()
         .filter_map(|candidate| {
@@ -85,7 +115,10 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
         .collect();
     let fresh_session = || Session::new(candidates.clone(), &request.settings.alphabet);
     let mut session = fresh_session();
-    let mut notice = request.notice.map(str::to_string);
+    let mut notice = match (request.notice, source_notice) {
+        (Some(first), Some(second)) => Some(format!("{first} · {second}")),
+        (first, second) => first.map(str::to_string).or(second),
+    };
     loop {
         let view = PickView {
             screen: &screen,
@@ -116,6 +149,31 @@ pub fn pick(request: &PickRequest<'_>, deps: &mut Deps<'_>) -> Result<Picked, Pi
             Outcome::Cancelled | Outcome::Continue => return Ok(Picked::Cancelled),
         }
     }
+}
+
+/// The links under the styled runs nearest the bottom of the screen, in
+/// reading order, each asked about once at its first cell.
+fn find_links(
+    screen: &Screen,
+    pane_id: &str,
+    host: &dyn PaneHost,
+) -> Result<Vec<Candidate>, PortError> {
+    let mut found = Vec::new();
+    for run in links::styled_runs(screen)
+        .into_iter()
+        .rev()
+        .take(MAX_LINK_LOOKUPS)
+    {
+        if let Some(url) = host.link_at(pane_id, run.row, run.col)? {
+            found.push(Candidate {
+                text: url,
+                pattern: LINK_PATTERN.to_string(),
+                segments: vec![run],
+            });
+        }
+    }
+    found.reverse();
+    Ok(found)
 }
 
 enum Dispatched {
@@ -347,11 +405,13 @@ mod tests {
         launcher: RecordingLauncher,
         files: FakeFiles,
         picker: ScriptedPicker,
+        source: HintSource,
     }
 
     impl World {
         fn new(keys: &[Key]) -> Self {
             World {
+                source: HintSource::Patterns,
                 host: FakeHost::showing(SCREEN),
                 clipboard: RecordingClipboard::default(),
                 launcher: RecordingLauncher::default(),
@@ -371,6 +431,7 @@ mod tests {
                 pane_id: "w1:p1",
                 geometry,
                 settings,
+                source: self.source,
                 notice,
             };
             let mut deps = Deps {
@@ -538,6 +599,96 @@ mod tests {
         assert_eq!(*world.host.layout_calls.borrow(), vec!["w1:p1".to_string()]);
     }
 
+    // Two labelled links on the top row: "PR #42" in blue, "notes" underlined.
+    const LINKS_SCREEN: &str =
+        "see \x1b[34mPR #42\x1b[0m and \x1b[4mnotes\x1b[24m here\nplain https://x.io/docs\n";
+    const PR_URL: &str = "https://github.com/o/r/pull/42";
+
+    fn link_world(keys: &[Key]) -> World {
+        let mut world = World::new(keys);
+        world.source = HintSource::Links;
+        world.host = FakeHost::showing(LINKS_SCREEN)
+            .with_link(0, 4, 6, PR_URL)
+            .with_link(0, 15, 5, "file:///work/notes.md");
+        world
+    }
+
+    // In link mode on LINKS_SCREEN: "notes" is "a", "PR #42" is "s".
+
+    #[test]
+    fn link_mode_asks_about_each_styled_run_once_and_opens_the_link_picked() {
+        let mut world = link_world(&[Key::Hint('s', Modifier::Main)]);
+        world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(*world.host.link_calls.borrow(), vec![(0, 15), (0, 4)]);
+        assert_eq!(
+            *world.launcher.opened.borrow(),
+            vec![(PR_URL.to_string(), None)]
+        );
+        assert_eq!(world.picker.seen_notice, None);
+    }
+
+    #[test]
+    fn copying_a_link_copies_its_address_not_its_label() {
+        let mut world = link_world(&[Key::Hint('s', Modifier::Ctrl)]);
+        world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(world.clipboard.copied, vec![PR_URL]);
+    }
+
+    #[test]
+    fn a_file_link_opens_as_the_file_it_names() {
+        let mut world = link_world(&[Key::Hint('a', Modifier::Main)]);
+        world.files = FakeFiles::default().with("/work/notes.md", PathKind::File);
+        let picked = world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(picked, Picked::Done("revealed 1 item (21 chars)".into()));
+        assert_eq!(
+            *world.launcher.revealed.borrow(),
+            vec![PathBuf::from("/work/notes.md")]
+        );
+    }
+
+    #[test]
+    fn without_link_lookups_the_usual_hints_come_back_with_a_notice() {
+        let mut world = link_world(&[Key::Hint('a', Modifier::Ctrl)]);
+        world.host = world.host.failing_links("pane is no longer visible");
+        world.run(&settings(), Some(&geometry()), Some("config.toml ignored"));
+        assert_eq!(world.host.link_calls.borrow().len(), 1);
+        assert_eq!(
+            world.picker.seen_notice.as_deref(),
+            Some(
+                "config.toml ignored · can't look up links (pane is no longer visible); \
+                 showing the usual hints"
+            )
+        );
+        assert_eq!(world.clipboard.copied, vec!["https://x.io/docs"]);
+    }
+
+    #[test]
+    fn a_screen_without_links_falls_back_to_the_usual_hints() {
+        let mut world = World::new(&[Key::Hint('a', Modifier::Ctrl)]);
+        world.source = HintSource::Links;
+        world.host = FakeHost::showing(LINKS_SCREEN);
+        world.run(&settings(), Some(&geometry()), None);
+        assert_eq!(
+            world.picker.seen_notice.as_deref(),
+            Some("no links found; showing the usual hints")
+        );
+        assert_eq!(world.clipboard.copied, vec!["https://x.io/docs"]);
+    }
+
+    #[test]
+    fn link_lookups_stop_at_the_cap_starting_from_the_bottom() {
+        let screen: String = (0..MAX_LINK_LOOKUPS + 6)
+            .map(|_| "\x1b[34mx\x1b[0m\n")
+            .collect();
+        let mut world = World::new(&[Key::Escape]);
+        world.source = HintSource::Links;
+        world.host = FakeHost::showing(&screen);
+        world.run(&settings(), Some(&geometry()), None);
+        let calls = world.host.link_calls.borrow();
+        assert_eq!(calls.len(), MAX_LINK_LOOKUPS);
+        assert_eq!(calls[0], (MAX_LINK_LOOKUPS + 5, 0));
+    }
+
     #[test]
     fn a_host_that_cannot_read_the_pane_is_an_error() {
         let mut world = World::new(&[Key::Escape]);
@@ -547,6 +698,7 @@ mod tests {
             pane_id: "w1:p1",
             geometry: None,
             settings: &settings(),
+            source: HintSource::Patterns,
             notice: None,
         };
         let mut deps = Deps {

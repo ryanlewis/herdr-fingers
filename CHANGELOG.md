@@ -7,6 +7,12 @@ the plugin notices; the build pipeline and the docs live in the commit history.
 
 ## [Unreleased]
 
+### Added
+- A `links` action hints links printed under a label (`PR #42`, a file
+  name), asking Herdr for the address under coloured or underlined text.
+  The keys act on the address; a `file://` link opens as the file it names.
+  Without Herdr's answer it falls back to the usual hints with a notice.
+
 ## [0.3.0] - 2026-10-15
 
 ### Added

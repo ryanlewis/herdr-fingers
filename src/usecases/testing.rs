@@ -33,6 +33,11 @@ pub(crate) struct FakeHost {
     pub label: Option<String>,
     pub cwd: Option<PathBuf>,
     pub reads_fail: bool,
+    /// Link addresses by `(row, col)` of any cell they cover.
+    pub links: BTreeMap<(usize, u16), String>,
+    /// Set when the host cannot look links up, with its error.
+    pub links_fail: Option<String>,
+    pub link_calls: RefCell<Vec<(usize, u16)>>,
     pub layout_calls: RefCell<Vec<String>>,
     pub sent: RefCell<Vec<(String, String)>>,
     pub notified: RefCell<Vec<(String, String)>>,
@@ -48,6 +53,9 @@ impl FakeHost {
             label: None,
             cwd: None,
             reads_fail: false,
+            links: BTreeMap::new(),
+            links_fail: None,
+            link_calls: RefCell::new(Vec::new()),
             layout_calls: RefCell::new(Vec::new()),
             sent: RefCell::new(Vec::new()),
             notified: RefCell::new(Vec::new()),
@@ -97,6 +105,19 @@ impl FakeHost {
         self.reads_fail = true;
         self
     }
+
+    /// A link to `url` drawn over `width` cells from `(row, col)`.
+    pub fn with_link(mut self, row: usize, col: u16, width: u16, url: &str) -> Self {
+        for offset in 0..width {
+            self.links.insert((row, col + offset), url.to_string());
+        }
+        self
+    }
+
+    pub fn failing_links(mut self, error: &str) -> Self {
+        self.links_fail = Some(error.to_string());
+        self
+    }
 }
 
 impl PaneHost for FakeHost {
@@ -112,6 +133,14 @@ impl PaneHost for FakeHost {
             return Err(PortError::new("pane not found"));
         }
         Ok(self.screen.clone())
+    }
+
+    fn link_at(&self, _pane_id: &str, row: usize, col: u16) -> Result<Option<String>, PortError> {
+        self.link_calls.borrow_mut().push((row, col));
+        if let Some(error) = &self.links_fail {
+            return Err(PortError::new(error));
+        }
+        Ok(self.links.get(&(row, col)).cloned())
     }
 
     fn pane_label(&self, _pane_id: &str) -> Result<Option<String>, PortError> {

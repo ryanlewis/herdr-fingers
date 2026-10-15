@@ -18,9 +18,10 @@ use crate::domain::screen::Screen;
 use crate::domain::session::Session;
 use crate::domain::settings::Settings;
 use crate::usecases::pick::{
-    self, Deps, EDIT_LINE_ENV, EDIT_PATH_ENV, EDITOR_ENV, PickError, PickRequest, Picked,
+    self, Deps, EDIT_LINE_ENV, EDIT_PATH_ENV, EDITOR_ENV, HintSource, PickError, PickRequest,
+    Picked,
 };
-use crate::usecases::start::{self, GEOMETRY_ENV, PATTERNS_ENV, StartError};
+use crate::usecases::start::{self, GEOMETRY_ENV, LINKS_ENV, PATTERNS_ENV, StartError};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -48,14 +49,27 @@ pub enum AppError {
     Editor(std::io::Error),
 }
 
-/// `start`: the plugin action.
+/// `start`: the plugin action. `--links` hints links instead of matches.
 pub fn start(args: &[String]) -> Result<(), AppError> {
     let context = PluginContext::from_env();
     let client = HerdrClient::from_env()?;
     let pane_id = context.focused_pane_id.ok_or(AppError::NoFocusedPane)?;
-    let patterns = option_value(args, "--patterns")?
+    let (links, args): (Vec<String>, Vec<String>) =
+        args.iter().cloned().partition(|arg| arg == "--links");
+    let source = if links.is_empty() {
+        HintSource::Patterns
+    } else {
+        HintSource::Links
+    };
+    let patterns = option_value(&args, "--patterns")?
         .map(|names| names.split(',').map(str::trim).collect::<Vec<_>>());
-    start::start(&client, &context.plugin_id, &pane_id, patterns.as_deref())?;
+    start::start(
+        &client,
+        &context.plugin_id,
+        &pane_id,
+        source,
+        patterns.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -111,6 +125,11 @@ fn run_overlay(context: &PluginContext) -> Result<(), AppError> {
         pane_id: &pane_id,
         geometry: geometry.as_ref(),
         settings: &settings,
+        source: if std::env::var_os(LINKS_ENV).is_some() {
+            HintSource::Links
+        } else {
+            HintSource::Patterns
+        },
         notice: notice.as_deref(),
     };
     let mut deps = Deps {

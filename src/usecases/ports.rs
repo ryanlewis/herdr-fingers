@@ -28,6 +28,10 @@ pub trait PaneHost {
     fn layout(&self, pane_id: &str) -> Result<Layout, PortError>;
     /// The pane's visible screen, ANSI styling included.
     fn read_visible(&self, pane_id: &str) -> Result<String, PortError>;
+    /// The address of the link drawn at a cell of the pane's visible screen,
+    /// if there is one. The host may hand the link to its own link handlers
+    /// on the way.
+    fn link_at(&self, pane_id: &str, row: usize, col: u16) -> Result<Option<String>, PortError>;
     /// The label the host shows for the pane, if any.
     fn pane_label(&self, pane_id: &str) -> Result<Option<String>, PortError>;
     /// The directory the pane's foreground process runs in.

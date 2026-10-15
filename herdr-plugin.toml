@@ -15,6 +15,13 @@ description = "Label every path, URL, hash, IP, UUID and number in the focused p
 contexts = ["pane", "workspace", "global"]
 command = ["./target/release/herdr-fingers", "start"]
 
+[[actions]]
+id = "links"
+title = "Fingers: open links"
+description = "Label the links printed under a label (a PR number, a file name) in the focused pane; type a label to open it (Ctrl copies the address, Shift pastes it)."
+contexts = ["pane", "workspace", "global"]
+command = ["./target/release/herdr-fingers", "start", "--links"]
+
 # The overlay itself. Opened by the `start` action, never bind it directly:
 # the action records where the focused pane sits first, so the hints land on it.
 [[panes]]

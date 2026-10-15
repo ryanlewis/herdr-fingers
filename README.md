@@ -103,6 +103,40 @@ The tmux-fingers built-ins, ported one for one:
 When two patterns start at the same column the earlier one in this table
 wins; custom patterns come before all of them.
 
+## Links
+
+Some programs print a link under a label, such as `PR #42` or a file name,
+and the address never shows on screen. The `links` action hints those
+instead of the usual matches. Bind it to a key of its own (`prefix+u` here is
+only an example):
+
+```toml
+[[keys.command]]
+key = "prefix+u"
+type = "plugin_action"
+command = "io.rlew.fingers.links"
+description = "open links with hints"
+```
+
+The keys work as usual, on the link's address: a plain hint opens it, `Ctrl`
+copies the address and `Shift` types it. Web links open in the browser. A
+`file://` link opens as the file it names, by the same rules as a path (see
+[Opening](#opening)); other schemes are refused.
+
+How it finds them: the pane text Herdr hands to plugins has no addresses,
+so the overlay asks Herdr (`pane.link.activate`) about each run of coloured
+or underlined text, at most 64 of them, nearest the bottom first. Plain text
+is never asked about, so a link a program draws without colour or underline
+gets no hint.
+
+- The pane must be on screen: Herdr answers only for panes in the focused
+  tab.
+- Herdr hands each address it reports to any plugin that declares a
+  `[[link_handlers]]` entry matching it, as if you had clicked the link. With
+  such a plugin installed, opening the overlay can start that plugin's action.
+- When Herdr cannot answer (an older Herdr, or the pane is not on screen), or
+  no link is found, the overlay shows the usual hints with a notice.
+
 ## Configure
 
 The plugin writes a fully commented `config.toml` on first run. Find it with:
