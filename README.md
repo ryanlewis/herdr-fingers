@@ -230,8 +230,10 @@ editor_split = "down"
 Each entry starts with `/` or `~/`; a `*` as the last part stands for
 every folder directly inside, and no other wildcards are allowed. The
 default is `["~/dev/*"]`, so `src/main.rs` printed in a pane sitting in
-another project still opens when only one of your projects has it. Set it
-to `[]` to turn this off.
+another project still opens when only one of your projects has it. At
+most 256 folders are looked in; when the search roots name more, nothing
+is opened from them, since a single match could not be told apart from a
+duplicate. Set it to `[]` to turn this off.
 
 ```toml
 search_roots = ["~/dev/*", "~/work/*", "/srv/app"]
