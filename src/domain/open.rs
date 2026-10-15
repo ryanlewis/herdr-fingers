@@ -232,6 +232,7 @@ pub enum SearchRootError {
 impl SearchRoot {
     pub fn parse(text: &str) -> Result<Self, SearchRootError> {
         let (dir, each_subdirectory) = match text.strip_suffix("/*") {
+            Some("") => ("/", true),
             Some(dir) => (dir, true),
             None => (text, false),
         };
@@ -371,6 +372,37 @@ pub fn github_repository(origin: &str) -> Option<String> {
         .then(|| format!("https://github.com/{owner}/{repository}"))
 }
 
+/// The first part of GitHub pages that belong to no repository, such as
+/// `https://github.com/settings/tokens`.
+const GITHUB_SITE_PAGES: &[&str] = &[
+    "about",
+    "apps",
+    "codespaces",
+    "collections",
+    "enterprise",
+    "enterprises",
+    "explore",
+    "features",
+    "issues",
+    "login",
+    "logout",
+    "marketplace",
+    "new",
+    "notifications",
+    "organizations",
+    "orgs",
+    "pricing",
+    "pulls",
+    "search",
+    "security",
+    "settings",
+    "site",
+    "sponsors",
+    "topics",
+    "trending",
+    "users",
+];
+
 /// The repository a web link into GitHub points at, such as
 /// `https://github.com/o/r/pull/12`.
 fn github_link_repository(link: &str) -> Option<String> {
@@ -382,6 +414,9 @@ fn github_link_repository(link: &str) -> Option<String> {
     let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let mut parts = rest.split('/');
     let (owner, repository) = (parts.next()?, parts.next()?);
+    if GITHUB_SITE_PAGES.contains(&owner.to_ascii_lowercase().as_str()) {
+        return None;
+    }
     github_repository(&format!("https://github.com/{owner}/{repository}"))
 }
 
@@ -399,15 +434,28 @@ fn commit_repository<S: Surroundings + ?Sized>(
     if let Some(repository) = request.cwd.and_then(github_origin) {
         return Some(repository);
     }
+    // Each run of `git` is a process, so a repository is asked once and a
+    // folder outside any repository not at all.
+    let mut asked: Vec<PathBuf> = request
+        .cwd
+        .and_then(|cwd| git_root(cwd, surroundings))
+        .into_iter()
+        .collect();
     let clues = nearest_clues(request, |text| {
         is_anchored(text) || github_link_repository(text).is_some()
     });
     clues.into_iter().find_map(|clue| {
-        github_link_repository(clue.text).or_else(|| {
-            folders_named_by(clue.text, request.home, surroundings)
-                .iter()
-                .find_map(|dir| github_origin(dir))
-        })
+        if let Some(repository) = github_link_repository(clue.text) {
+            return Some(repository);
+        }
+        let (path, kind) = named_by(clue.text, request.home, surroundings)?;
+        let root = repository_holding(&path, kind, surroundings)?;
+        if asked.contains(&root) {
+            return None;
+        }
+        let repository = github_origin(&root);
+        asked.push(root);
+        repository
     })
 }
 
@@ -499,10 +547,11 @@ fn found((path, kind, line): (PathBuf, PathKind, Option<u32>)) -> Located {
 fn spellings(text: &str) -> Vec<(&str, Option<u32>)> {
     let mut spellings = Vec::new();
     let without_full_stop = text.trim_end_matches('.');
-    for whole in [text, without_full_stop] {
-        if whole.is_empty() || spellings.iter().any(|&(seen, _)| seen == whole) {
-            continue;
-        }
+    let mut wholes = vec![text];
+    if !without_full_stop.is_empty() && without_full_stop != text {
+        wholes.push(without_full_stop);
+    }
+    for whole in wholes {
         let (written, line) = split_line_suffix(whole);
         spellings.push((written, line));
         if let Some(unprefixed) = written
@@ -511,9 +560,6 @@ fn spellings(text: &str) -> Vec<(&str, Option<u32>)> {
         {
             spellings.push((unprefixed, line));
         }
-    }
-    if spellings.is_empty() {
-        spellings.push((text, None));
     }
     spellings
 }
@@ -582,27 +628,46 @@ fn folders_named_by<S: Surroundings + ?Sized>(
     home: Option<&Path>,
     surroundings: &S,
 ) -> Vec<PathBuf> {
-    let Some((path, kind, _)) = spellings(text).iter().find_map(|&(written, line)| {
-        let path = absolute(written, None, home)?;
-        existing(path, line, surroundings)
-    }) else {
+    let Some((path, kind)) = named_by(text, home, surroundings) else {
         return Vec::new();
     };
-    let folder = if kind == PathKind::Directory {
-        Some(path.as_path())
-    } else {
-        path.parent()
-    };
     let mut folders = Vec::new();
-    if kind == PathKind::Directory {
-        folders.push(path.clone());
-    }
-    if let Some(root) = folder.and_then(|folder| git_root(folder, surroundings))
-        && !folders.contains(&root)
+    if let Some(root) = repository_holding(&path, kind, surroundings)
+        && root != path
     {
         folders.push(root);
     }
+    if kind == PathKind::Directory {
+        folders.insert(0, path);
+    }
     folders
+}
+
+/// What an absolute or `~` path on screen names, when it exists.
+fn named_by<S: Surroundings + ?Sized>(
+    text: &str,
+    home: Option<&Path>,
+    surroundings: &S,
+) -> Option<(PathBuf, PathKind)> {
+    spellings(text).iter().find_map(|&(written, line)| {
+        let path = absolute(written, None, home)?;
+        let (path, kind, _) = existing(path, line, surroundings)?;
+        Some((path, kind))
+    })
+}
+
+/// The Git root of the repository a file or folder is in.
+fn repository_holding<S: Surroundings + ?Sized>(
+    path: &Path,
+    kind: PathKind,
+    surroundings: &S,
+) -> Option<PathBuf> {
+    let folder = if kind == PathKind::Directory {
+        Some(path)
+    } else {
+        path.parent()
+    };
+    folder.and_then(|folder| git_root(folder, surroundings))
 }
 
 /// The nearest folder at or above `dir` holding a `.git`.
@@ -704,6 +769,7 @@ fn absolute(written: &str, cwd: Option<&Path>, home: Option<&Path>) -> Option<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use std::collections::BTreeMap;
 
     #[derive(Default)]
@@ -711,6 +777,7 @@ mod tests {
         kinds: BTreeMap<PathBuf, PathKind>,
         links: BTreeMap<PathBuf, PathBuf>,
         origins: BTreeMap<PathBuf, String>,
+        git_runs: Cell<usize>,
     }
 
     impl Machine {
@@ -753,6 +820,7 @@ mod tests {
         }
 
         fn git_origin(&self, dir: &Path) -> Option<String> {
+            self.git_runs.set(self.git_runs.get() + 1);
             dir.ancestors()
                 .find_map(|folder| self.origins.get(folder).cloned())
         }
@@ -967,6 +1035,20 @@ mod tests {
         assert_eq!(
             open("src/gone.rs.", "path", &machine),
             OpenTarget::Refused(Refusal::NotFound("/work/repo/src/gone.rs.".into()))
+        );
+    }
+
+    #[test]
+    fn each_spelling_of_a_path_is_tried_once() {
+        assert_eq!(spellings("src/x.rs:12"), vec![("src/x.rs", Some(12))]);
+        assert_eq!(
+            spellings("a/x.rs."),
+            vec![
+                ("a/x.rs.", None),
+                ("x.rs.", None),
+                ("a/x.rs", None),
+                ("x.rs", None)
+            ]
         );
     }
 
@@ -1348,6 +1430,37 @@ mod tests {
     }
 
     #[test]
+    fn a_github_page_that_is_not_a_repository_is_no_clue_for_a_sha() {
+        assert_eq!(
+            Ask::new("8b1a995", SHA_PATTERN)
+                .at_row(4)
+                .beside("https://github.com/o/r", 0)
+                .beside("https://github.com/settings/tokens", 3)
+                .beside("https://github.com/orgs/acme/teams", 4)
+                .resolve(&Machine::default()),
+            OpenTarget::Url("https://github.com/o/r/commit/8b1a995".into())
+        );
+    }
+
+    #[test]
+    fn a_sha_asks_git_once_per_repository_on_screen_and_never_outside_one() {
+        let machine = Machine::default()
+            .with_repository("/home/me/dev/fingers")
+            .with("/home/me/dev/fingers/src", PathKind::Directory)
+            .with("/home/me/dev/fingers/README.md", PathKind::File)
+            .with("/tmp/plain", PathKind::Directory)
+            .with_origin_at("/home/me/dev/fingers", "git@gitlab.com:me/fingers.git");
+        let ask = Ask::new("8b1a995", SHA_PATTERN)
+            .from("/home/me/dev/notes")
+            .beside("~/dev/fingers/src", 1)
+            .beside("~/dev/fingers/README.md", 2)
+            .beside("~/dev/fingers/src", 3)
+            .beside("/tmp/plain", 4);
+        assert_eq!(ask.resolve(&machine), OpenTarget::CopySha("8b1a995".into()));
+        assert_eq!(machine.git_runs.get(), 2, "the pane, then fingers once");
+    }
+
+    #[test]
     fn the_pane_repository_wins_over_the_screen_for_a_sha() {
         let machine = Machine::default().with_origin("git@github.com:o/r.git");
         assert_eq!(
@@ -1362,6 +1475,13 @@ mod tests {
     fn search_roots_are_absolute_with_at_most_a_final_star() {
         assert!(SearchRoot::parse("~/dev/*").is_ok());
         assert!(SearchRoot::parse("/srv/code/").is_ok());
+        assert_eq!(
+            SearchRoot::parse("/*"),
+            Ok(SearchRoot {
+                dir: "/".into(),
+                each_subdirectory: true
+            })
+        );
         assert_eq!(
             SearchRoot::default_roots(),
             vec![SearchRoot::parse("~/dev/*").unwrap()]
